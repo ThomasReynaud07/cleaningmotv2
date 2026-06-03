@@ -9,6 +9,7 @@ export interface AuthUser {
   fullName: string
   email: string
   role: 'user' | 'admin'
+  avatarUrl?: string | null
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -78,5 +79,9 @@ export const useAuthStore = defineStore('auth', () => {
     clearAuth()
   }
 
-  return { token, user, isLoggedIn, isAdmin, setAuth, clearAuth, fetchMe, login, register, logout }
+  function setAvatarUrl(url: string) {
+    if (user.value) user.value.avatarUrl = url
+  }
+
+  return { token, user, isLoggedIn, isAdmin, setAuth, clearAuth, fetchMe, login, register, logout, setAvatarUrl }
 })

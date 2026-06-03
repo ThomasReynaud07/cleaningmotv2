@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, nextTick } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { messagesApi, type Message } from '@/services/api'
 import {
   Sparkles, Settings, User, LogOut, Menu, X, ChevronDown,
+  MessageCircle, Send, Mail,
 } from 'lucide-vue-next'
 
 const auth = useAuthStore()
@@ -11,12 +13,86 @@ const router = useRouter()
 const mobileOpen = ref(false)
 const userMenuOpen = ref(false)
 
-onMounted(() => auth.fetchMe())
+// ─── Chat bubble ─────────────────────────────────────────────────────────────
+const chatOpen = ref(false)
+const chatMessages = ref<Message[]>([])
+const chatUnread = ref(0)
+const chatLoading = ref(false)
+const chatNewMsg = ref('')
+const chatSending = ref(false)
+const chatThreadRef = ref<HTMLElement | null>(null)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+async function fetchUnread() {
+  if (!auth.isLoggedIn || auth.isAdmin) return
+  try {
+    const { data } = await messagesApi.unreadCount()
+    chatUnread.value = data.unread
+  } catch {}
+}
+
+async function openChat() {
+  chatOpen.value = true
+  chatLoading.value = true
+  try {
+    const { data } = await messagesApi.getThread()
+    chatMessages.value = data
+    chatUnread.value = 0
+    await nextTick()
+    chatThreadRef.value?.scrollTo({ top: chatThreadRef.value.scrollHeight })
+  } finally {
+    chatLoading.value = false
+  }
+}
+
+function toggleChat() {
+  if (chatOpen.value) {
+    chatOpen.value = false
+  } else {
+    openChat()
+  }
+}
+
+async function sendChatMessage() {
+  if (!chatNewMsg.value.trim() || chatSending.value) return
+  chatSending.value = true
+  try {
+    const { data } = await messagesApi.send(chatNewMsg.value)
+    chatMessages.value.push(data)
+    chatNewMsg.value = ''
+    await nextTick()
+    chatThreadRef.value?.scrollTo({ top: chatThreadRef.value.scrollHeight, behavior: 'smooth' })
+  } finally {
+    chatSending.value = false
+  }
+}
+
+function formatDate(d: string) {
+  return new Intl.DateTimeFormat('fr-CH', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  }).format(new Date(d))
+}
+
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
+
+onMounted(async () => {
+  await auth.fetchMe()
+  if (auth.isLoggedIn && !auth.isAdmin) {
+    fetchUnread()
+    pollTimer = setInterval(fetchUnread, 30_000)
+  }
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
 
 async function handleLogout() {
   await auth.logout()
   router.push('/login')
   mobileOpen.value = false
+  chatOpen.value = false
 }
 </script>
 
@@ -42,9 +118,22 @@ async function handleLogout() {
               Admin
             </RouterLink>
 
+            <!-- Chat bubble (non-admins only) -->
+            <button
+              v-if="!auth.isAdmin"
+              class="chat-btn"
+              :class="{ 'chat-btn-active': chatOpen }"
+              @click="toggleChat"
+              aria-label="Messages"
+            >
+              <MessageCircle :size="20" />
+              <span v-if="chatUnread > 0" class="chat-badge">{{ chatUnread > 9 ? '9+' : chatUnread }}</span>
+            </button>
+
             <div class="user-menu" @click="userMenuOpen = !userMenuOpen" v-click-outside="() => userMenuOpen = false">
               <div class="user-avatar" :class="{ 'avatar-admin': auth.isAdmin }">
-                {{ auth.user.firstName[0] }}{{ auth.user.lastName[0] }}
+                <img v-if="auth.user.avatarUrl" :src="auth.user.avatarUrl" class="avatar-img" alt="" />
+                <template v-else>{{ auth.user.firstName[0] }}{{ auth.user.lastName[0] }}</template>
               </div>
               <span class="user-name-text">{{ auth.user.firstName }}</span>
               <ChevronDown :size="14" :class="{ rotated: userMenuOpen }" class="chevron" />
@@ -52,7 +141,8 @@ async function handleLogout() {
               <div v-if="userMenuOpen" class="user-dropdown">
                 <div class="user-dropdown-header">
                   <div class="user-avatar avatar-lg" :class="{ 'avatar-admin': auth.isAdmin }">
-                    {{ auth.user.firstName[0] }}{{ auth.user.lastName[0] }}
+                    <img v-if="auth.user.avatarUrl" :src="auth.user.avatarUrl" class="avatar-img" alt="" />
+                    <template v-else>{{ auth.user.firstName[0] }}{{ auth.user.lastName[0] }}</template>
                   </div>
                   <div>
                     <div class="dropdown-name">{{ auth.user.firstName }} {{ auth.user.lastName }}</div>
@@ -101,6 +191,60 @@ async function handleLogout() {
         </template>
       </div>
     </header>
+
+    <!-- Chat panel backdrop -->
+    <div v-if="chatOpen" class="chat-backdrop" @click="chatOpen = false"></div>
+
+    <!-- Chat panel -->
+    <div v-if="chatOpen && auth.isLoggedIn && !auth.isAdmin" class="chat-panel card">
+      <div class="chat-panel-header">
+        <div class="chat-panel-title">
+          <MessageCircle :size="16" style="color:#7c3aed" />
+          <span>Messages — Administration</span>
+        </div>
+        <button class="modal-close" @click="chatOpen = false"><X :size="14" /></button>
+      </div>
+      <div class="chat-panel-thread" ref="chatThreadRef">
+        <div v-if="chatLoading" class="chat-loading">
+          <span class="spinner spinner-dark"></span>
+        </div>
+        <div v-else-if="!chatMessages.length" class="chat-empty">
+          <Mail :size="28" style="color:var(--gray-300);display:block;margin:0 auto 0.5rem" />
+          <p>Aucun message. Écrivez pour contacter un administrateur.</p>
+        </div>
+        <template v-else>
+          <div
+            v-for="m in chatMessages"
+            :key="m.id"
+            class="bubble-row"
+            :class="m.fromMe ? 'bubble-row-right' : 'bubble-row-left'"
+          >
+            <div class="bubble" :class="m.fromMe ? 'bubble-me' : 'bubble-other'">
+              <div class="bubble-sender">{{ m.fromMe ? 'Moi' : m.sender.firstName + ' ' + m.sender.lastName }}</div>
+              <div class="bubble-text">{{ m.content }}</div>
+              <div class="bubble-time">{{ formatDate(m.createdAt) }}</div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="chat-compose">
+        <textarea
+          v-model="chatNewMsg"
+          class="form-control chat-input"
+          rows="2"
+          placeholder="Votre message… (Ctrl+Entrée pour envoyer)"
+          @keydown.ctrl.enter="sendChatMessage"
+        ></textarea>
+        <button
+          class="btn btn-primary chat-send"
+          @click="sendChatMessage"
+          :disabled="!chatNewMsg.trim() || chatSending"
+        >
+          <span v-if="chatSending" class="spinner"></span>
+          <Send v-else :size="14" />
+        </button>
+      </div>
+    </div>
 
     <main class="main-content">
       <RouterView />
@@ -218,6 +362,82 @@ button { font-family: inherit; }
 .nav-admin-btn:hover { background: var(--gray-200); }
 .nav-admin-btn.router-link-active { background: var(--primary-light); color: var(--primary); border-color: #bfdbfe; }
 
+/* ─── Chat bubble ─── */
+.chat-btn {
+  position: relative;
+  background: none; border: none; cursor: pointer;
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--gray-500);
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.chat-btn:hover { background: var(--gray-100); color: var(--gray-700); }
+.chat-btn.chat-btn-active { color: #7c3aed; background: #f5f3ff; }
+.chat-badge {
+  position: absolute; top: 1px; right: 1px;
+  background: var(--danger); color: white;
+  min-width: 16px; height: 16px; border-radius: 999px;
+  font-size: 0.6rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 3px;
+  border: 2px solid white;
+}
+
+/* ─── Chat panel ─── */
+.chat-backdrop {
+  position: fixed; inset: 0;
+  z-index: 150;
+}
+.chat-panel {
+  position: fixed;
+  top: calc(var(--nav-height) + 10px);
+  right: 1rem;
+  width: 340px;
+  height: 480px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.2s ease;
+}
+.chat-panel-header {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--gray-200);
+  background: #f5f3ff;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.chat-panel-title { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-weight: 600; color: var(--gray-800); }
+.chat-panel-thread {
+  flex: 1; overflow-y: auto; padding: 0.875rem;
+  display: flex; flex-direction: column; gap: 0.625rem;
+}
+.chat-loading { display: flex; justify-content: center; padding: 1.5rem; }
+.chat-empty { text-align: center; padding: 2rem 1rem; color: var(--gray-400); font-size: 0.8rem; line-height: 1.5; }
+.chat-compose {
+  display: flex; gap: 0.5rem; padding: 0.75rem 0.875rem;
+  border-top: 1px solid var(--gray-200); background: var(--gray-50);
+  align-items: flex-end; flex-shrink: 0;
+}
+.chat-input { flex: 1; resize: none; font-size: 0.8rem; min-height: unset; }
+.chat-send { flex-shrink: 0; height: 34px; padding: 0 0.75rem; }
+
+/* ─── Bubble UI (used by chat panel + AdminView) ─── */
+.bubble-row { display: flex; }
+.bubble-row-right { justify-content: flex-end; }
+.bubble-row-left { justify-content: flex-start; }
+.bubble { max-width: 75%; padding: 0.55rem 0.8rem; border-radius: 12px; }
+.bubble-me { background: var(--primary); color: white; border-bottom-right-radius: 3px; }
+.bubble-other { background: var(--gray-100); color: var(--gray-900); border-bottom-left-radius: 3px; }
+.bubble-admin-purple { background: #7c3aed; color: white; border-bottom-right-radius: 3px; }
+.bubble-sender { font-size: 0.68rem; font-weight: 600; margin-bottom: 0.2rem; opacity: 0.75; }
+.bubble-text { font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; }
+.bubble-time { font-size: 0.65rem; margin-top: 0.25rem; opacity: 0.6; text-align: right; }
+
+/* ─── Avatar with photo ─── */
+.avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+
 /* User menu */
 .user-menu {
   position: relative;
@@ -239,6 +459,7 @@ button { font-family: inherit; }
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 0.7rem; font-weight: 700; color: white; text-transform: uppercase; flex-shrink: 0;
+  overflow: hidden;
 }
 .user-avatar.avatar-lg { width: 40px; height: 40px; font-size: 0.85rem; }
 .avatar-admin { background: #b45309; }
@@ -319,7 +540,8 @@ button { font-family: inherit; }
 @media (max-width: 768px) {
   .mobile-toggle { display: flex; }
   .navbar-center { display: none; }
-  .nav-admin-btn, .user-menu, .btn-login { display: none; }
+  .nav-admin-btn, .user-menu, .btn-login, .chat-btn { display: none; }
+  .chat-panel { right: 0.5rem; left: 0.5rem; width: auto; }
 }
 
 /* ─── MAIN ─── */

@@ -123,6 +123,13 @@ export const profileApi = {
   myWarnings: () => api.get<MyWarning[]>('/api/me/warnings'),
   myComments: () => api.get<MyComment[]>('/api/me/comments'),
   listUsers: () => api.get<UserBasic[]>('/api/users'),
+  uploadAvatar: (file: File) => {
+    const fd = new FormData()
+    fd.append('avatar', file)
+    return api.patch<{ avatarUrl: string }>('/api/me/avatar', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
 }
 
 export const adminApi = {
@@ -168,6 +175,7 @@ export interface Message {
 export const messagesApi = {
   getThread: () => api.get<Message[]>('/api/me/messages'),
   send: (content: string) => api.post<Message>('/api/me/messages', { content }),
+  unreadCount: () => api.get<{ unread: number }>('/api/me/messages/unread'),
 }
 
 export const adminMessagesApi = {

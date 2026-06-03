@@ -99,6 +99,7 @@ app.post('/auth/register', async (c) => {
         fullName: `${user.firstName} ${user.lastName}`,
         email: user.email,
         role: user.role,
+        avatarUrl: user.avatarUrl ?? null,
       },
     },
     201
@@ -139,6 +140,7 @@ app.post('/auth/login', async (c) => {
       fullName: `${user.firstName} ${user.lastName}`,
       email: user.email,
       role: user.role,
+      avatarUrl: user.avatarUrl ?? null,
     },
   })
 })
@@ -162,6 +164,7 @@ app.get('/auth/me', authMiddleware, async (c) => {
     fullName: `${user.firstName} ${user.lastName}`,
     email: user.email,
     role: user.role,
+    avatarUrl: user.avatarUrl ?? null,
   })
 })
 
@@ -828,6 +831,22 @@ app.get('/admin/audit-logs', authMiddleware, adminMiddleware, async (c) => {
   })
 })
 
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+
+app.patch('/me/avatar', authMiddleware, async (c) => {
+  const currentUser = getUser(c)
+  const body = await c.req.formData()
+  const file = body.get('avatar') as File | null
+  if (!file) return c.json({ error: 'No file provided' }, 422)
+
+  const ext = (file.name.split('.').pop() ?? 'jpg').toLowerCase()
+  const blob = await put(`avatars/user-${currentUser.sub}-${Date.now()}.${ext}`, file, { access: 'public' })
+
+  await db.update(schema.users).set({ avatarUrl: blob.url, updatedAt: new Date() }).where(eq(schema.users.id, currentUser.sub))
+
+  return c.json({ avatarUrl: blob.url })
+})
+
 // ─── Messages ────────────────────────────────────────────────────────────────
 
 async function getThread(userId: number) {
@@ -848,6 +867,16 @@ async function getThread(userId: number) {
     .orderBy(asc(schema.messages.createdAt))
   return msgs
 }
+
+// User: count unread messages from admin
+app.get('/me/messages/unread', authMiddleware, async (c) => {
+  const user = getUser(c)
+  const [{ value }] = await db
+    .select({ value: count() })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.userId, user.sub), ne(schema.messages.senderId, user.sub), eq(schema.messages.isRead, false)))
+  return c.json({ unread: Number(value) })
+})
 
 // User: get own thread
 app.get('/me/messages', authMiddleware, async (c) => {
