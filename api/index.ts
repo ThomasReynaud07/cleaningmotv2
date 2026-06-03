@@ -1,6 +1,5 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { handle } from 'hono/vercel'
 import bcrypt from 'bcryptjs'
 import { eq, desc, ilike, or, and, count, sql } from 'drizzle-orm'
 import { put } from '@vercel/blob'
@@ -8,7 +7,7 @@ import { db } from './lib/db.js'
 import * as schema from './lib/schema.js'
 import { signToken, authMiddleware, adminMiddleware, type JwtPayload } from './lib/auth.js'
 
-export const config = { runtime: 'edge' }
+export const config = { runtime: 'nodejs' }
 
 const app = new Hono().basePath('/api')
 
@@ -829,4 +828,4 @@ app.get('/admin/audit-logs', authMiddleware, adminMiddleware, async (c) => {
   })
 })
 
-export default handle(app)
+export default (req: Request) => app.fetch(req)
