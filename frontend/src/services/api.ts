@@ -194,4 +194,34 @@ export const adminMessagesApi = {
 
 export const getPhotoUrl = (url: string) => url
 
+export interface ChecklistItem {
+  id: number
+  label: string
+  position: number
+  active: boolean
+  createdAt: string
+}
+
+export interface HistoryEvent {
+  id: string
+  type: string
+  date: string
+  actor: { id: number; firstName: string; lastName: string } | null
+  payload: Record<string, any> | null
+}
+
+export const checklistApi = {
+  getItems: () => api.get<ChecklistItem[]>('/api/checklist'),
+  addItem: (label: string) => api.post<ChecklistItem>('/api/admin/checklist', { label }),
+  updateItem: (id: number, data: { label?: string; active?: boolean }) =>
+    api.patch<ChecklistItem>(`/api/admin/checklist/${id}`, data),
+  deleteItem: (id: number) => api.delete(`/api/admin/checklist/${id}`),
+  submitCleaning: (labId: number, data: { checkedItemIds: number[]; notes?: string }) =>
+    api.post<{ ok: boolean }>(`/api/labs/${labId}/clean`, data),
+}
+
+export const historyApi = {
+  getLabHistory: (labId: number) => api.get<HistoryEvent[]>(`/api/labs/${labId}/history`),
+}
+
 export default api

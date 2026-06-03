@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, nextTick } from 'vue'
-import { adminApi, adminMessagesApi, auditApi, type AdminUser, type UserWarning, type AuditLog, type Message } from '@/services/api'
+import { adminApi, adminMessagesApi, auditApi, checklistApi, type AdminUser, type UserWarning, type AuditLog, type Message, type ChecklistItem } from '@/services/api'
 import {
   Users, Shield, AlertTriangle, Search, ChevronDown,
   Crown, UserCheck, Trash2, X, Plus, Eye, ScrollText, ChevronLeft, ChevronRight, Mail, Send,
+  ClipboardList, ClipboardCheck, GripVertical,
 } from 'lucide-vue-next'
 
-const activeTab = ref<'users' | 'audit'>('users')
+const activeTab = ref<'users' | 'audit' | 'checklist'>('users')
 
 const users = ref<AdminUser[]>([])
 const loading = ref(false)
@@ -30,7 +31,7 @@ const filteredUsers = computed(() =>
 )
 const totalWarns = computed(() => users.value.reduce((s, u) => s + u.warningCount, 0))
 
-onMounted(() => fetchUsers())
+onMounted(() => { fetchUsers(); loadChecklist() })
 
 async function fetchUsers(search?: string) {
   loading.value = true
@@ -125,6 +126,12 @@ const auditPage = ref(1)
 const auditLastPage = ref(1)
 const auditTotal = ref(0)
 
+// Checklist
+const checklistItems = ref<ChecklistItem[]>([])
+const checklistLoading = ref(false)
+const newItemLabel = ref('')
+const addingItem = ref(false)
+
 const actionLabels: Record<string, { label: string; color: string }> = {
   'report.created':       { label: 'Signalement créé',       color: 'audit-warning' },
   'report.status_updated':{ label: 'Statut rapport modifié', color: 'audit-info' },
@@ -149,9 +156,42 @@ async function fetchAuditLogs(page = 1) {
   finally { auditLoading.value = false }
 }
 
-function switchTab(tab: 'users' | 'audit') {
+function switchTab(tab: 'users' | 'audit' | 'checklist') {
   activeTab.value = tab
   if (tab === 'audit' && auditLogs.value.length === 0) fetchAuditLogs()
+  if (tab === 'checklist' && checklistItems.value.length === 0) loadChecklist()
+}
+
+async function loadChecklist() {
+  checklistLoading.value = true
+  try { const { data } = await checklistApi.getItems(); checklistItems.value = data } catch {}
+  finally { checklistLoading.value = false }
+}
+
+async function addChecklistItem() {
+  if (!newItemLabel.value.trim() || addingItem.value) return
+  addingItem.value = true
+  try {
+    const { data } = await checklistApi.addItem(newItemLabel.value)
+    checklistItems.value.push(data)
+    newItemLabel.value = ''
+  } finally { addingItem.value = false }
+}
+
+async function toggleChecklistItem(item: ChecklistItem) {
+  try {
+    const { data } = await checklistApi.updateItem(item.id, { active: !item.active })
+    const idx = checklistItems.value.findIndex(i => i.id === item.id)
+    if (idx !== -1) checklistItems.value[idx] = data
+  } catch {}
+}
+
+async function deleteChecklistItem(item: ChecklistItem) {
+  if (!confirm(`Supprimer "${item.label}" ?`)) return
+  try {
+    await checklistApi.deleteItem(item.id)
+    checklistItems.value = checklistItems.value.filter(i => i.id !== item.id)
+  } catch {}
 }
 
 function auditPayloadSummary(log: AuditLog): string {
@@ -181,6 +221,9 @@ function auditPayloadSummary(log: AuditLog): string {
       </button>
       <button class="atab" :class="{ active: activeTab === 'audit' }" @click="switchTab('audit')">
         <ScrollText :size="15" /> Journal d'audit
+      </button>
+      <button :class="['atab', { active: activeTab === 'checklist' }]" @click="switchTab('checklist')">
+        <ClipboardList :size="15" /> Checklist
       </button>
     </div>
 
@@ -326,6 +369,45 @@ function auditPayloadSummary(log: AuditLog): string {
             </tr>
           </tbody>
         </table>
+      </div>
+    </template>
+
+    <!-- Checklist tab -->
+    <template v-if="activeTab === 'checklist'">
+      <div class="page-header">
+        <h2 class="page-title">Checklist de nettoyage</h2>
+        <p class="page-subtitle">Définissez les points à valider lors de chaque nettoyage</p>
+      </div>
+
+      <div class="card" style="padding:1.25rem">
+        <div class="cl-add-row">
+          <input v-model="newItemLabel" class="form-control" placeholder="Nouveau point de contrôle..." @keydown.enter="addChecklistItem" style="flex:1" />
+          <button class="btn btn-primary" :disabled="!newItemLabel.trim() || addingItem" @click="addChecklistItem">
+            <span v-if="addingItem" class="spinner"></span>
+            <Plus v-else :size="14" /> Ajouter
+          </button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1rem;overflow:hidden">
+        <div v-if="checklistLoading" class="loading-center"><span class="spinner spinner-dark"></span></div>
+        <div v-else-if="!checklistItems.length" class="empty-state">
+          <ClipboardList :size="36" />
+          <p>Aucun élément — ajoutez des points ci-dessus.</p>
+        </div>
+        <div v-else class="cl-list">
+          <div v-for="item in checklistItems" :key="item.id" class="cl-item" :class="{ 'cl-item-inactive': !item.active }">
+            <GripVertical :size="16" style="color:var(--gray-300);flex-shrink:0" />
+            <span class="cl-item-label">{{ item.label }}</span>
+            <span v-if="!item.active" class="cl-inactive-tag">Désactivé</span>
+            <button class="btn btn-sm" :class="item.active ? 'btn-outline' : 'btn-success'" @click="toggleChecklistItem(item)" style="flex-shrink:0">
+              {{ item.active ? 'Désactiver' : 'Activer' }}
+            </button>
+            <button class="btn btn-sm btn-outline btn-del-cl" @click="deleteChecklistItem(item)" style="flex-shrink:0">
+              <Trash2 :size="13" />
+            </button>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -592,6 +674,21 @@ function auditPayloadSummary(log: AuditLog): string {
 .bubble-time { font-size: 0.65rem; margin-top: 0.25rem; opacity: 0.6; text-align: right; }
 .admin-msg-compose { display: flex; gap: 0.6rem; align-items: flex-end; }
 .msg-input-sm { flex: 1; resize: none; font-size: 0.85rem; }
+
+.cl-add-row { display: flex; gap: 0.75rem; align-items: center; }
+.cl-list { display: flex; flex-direction: column; }
+.cl-item {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.875rem 1.25rem; border-bottom: 1px solid var(--gray-100);
+  transition: background 0.1s;
+}
+.cl-item:last-child { border-bottom: none; }
+.cl-item:hover { background: var(--gray-50); }
+.cl-item-inactive { opacity: 0.55; }
+.cl-item-label { flex: 1; font-size: 0.875rem; color: var(--gray-700); }
+.cl-inactive-tag { font-size: 0.7rem; font-weight: 600; background: var(--gray-100); color: var(--gray-400); padding: 0.1rem 0.4rem; border-radius: 4px; }
+.btn-del-cl { color: var(--danger) !important; border-color: #fecaca !important; }
+.btn-del-cl:hover { background: var(--danger-light) !important; }
 
 .hide-sm { }
 @media (max-width: 768px) {

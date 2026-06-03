@@ -308,6 +308,10 @@ app.put('/labs/:id', authMiddleware, async (c) => {
 
   const [lab] = await db.update(schema.labs).set(updates).where(eq(schema.labs.id, id)).returning()
 
+  if (body.status !== undefined && body.status !== existing.status) {
+    try { await auditLog(getUser(c).sub, 'lab.status_changed', 'lab', id, { labName: lab.name, oldStatus: existing.status, newStatus: body.status }) } catch {}
+  }
+
   return c.json(lab)
 })
 
@@ -982,6 +986,111 @@ app.post('/admin/messages/:userId', authMiddleware, adminMiddleware, async (c) =
     .values({ userId, senderId: admin.sub, content: content.trim() })
     .returning()
   return c.json({ ...msg, fromMe: true, sender: { firstName: admin.firstName, lastName: admin.lastName } }, 201)
+})
+
+// ─── Checklist ────────────────────────────────────────────────────────────────
+
+const DEFAULT_CHECKLIST = [
+  'Tableau blanc nettoyé',
+  'Poubelles vidées',
+  'Claviers et souris essuyés',
+  'Bureaux et plans de travail nettoyés',
+  'Sol balayé ou aspiré',
+  'Fenêtres et stores fermés',
+  'Équipements rangés et éteints',
+  'Lumières éteintes',
+]
+
+app.get('/checklist', authMiddleware, async (c) => {
+  let items = await db.select().from(schema.cleaningChecklistItems)
+    .where(eq(schema.cleaningChecklistItems.active, true))
+    .orderBy(asc(schema.cleaningChecklistItems.position))
+  if (items.length === 0) {
+    await db.insert(schema.cleaningChecklistItems).values(
+      DEFAULT_CHECKLIST.map((label, i) => ({ label, position: i }))
+    )
+    items = await db.select().from(schema.cleaningChecklistItems)
+      .where(eq(schema.cleaningChecklistItems.active, true))
+      .orderBy(asc(schema.cleaningChecklistItems.position))
+  }
+  return c.json(items)
+})
+
+app.post('/admin/checklist', authMiddleware, adminMiddleware, async (c) => {
+  const { label } = await c.req.json<{ label: string }>()
+  if (!label?.trim()) return c.json({ error: 'Label required' }, 422)
+  const maxPos = await db.select({ val: schema.cleaningChecklistItems.position })
+    .from(schema.cleaningChecklistItems).orderBy(desc(schema.cleaningChecklistItems.position)).limit(1)
+  const position = (maxPos[0]?.val ?? -1) + 1
+  const [item] = await db.insert(schema.cleaningChecklistItems)
+    .values({ label: label.trim(), position }).returning()
+  return c.json(item, 201)
+})
+
+app.patch('/admin/checklist/:id', authMiddleware, adminMiddleware, async (c) => {
+  const id = Number(c.req.param('id'))
+  const { label, active } = await c.req.json<{ label?: string; active?: boolean }>()
+  const updates: any = {}
+  if (label !== undefined) updates.label = label.trim()
+  if (active !== undefined) updates.active = active
+  const [item] = await db.update(schema.cleaningChecklistItems).set(updates)
+    .where(eq(schema.cleaningChecklistItems.id, id)).returning()
+  if (!item) return c.json({ error: 'Not found' }, 404)
+  return c.json(item)
+})
+
+app.delete('/admin/checklist/:id', authMiddleware, adminMiddleware, async (c) => {
+  const id = Number(c.req.param('id'))
+  await db.delete(schema.cleaningChecklistItems).where(eq(schema.cleaningChecklistItems.id, id))
+  return c.body(null, 204)
+})
+
+// ─── Cleaning sessions ────────────────────────────────────────────────────────
+
+app.post('/labs/:id/clean', authMiddleware, async (c) => {
+  const labId = Number(c.req.param('id'))
+  const currentUser = getUser(c)
+  const { checkedItemIds, notes } = await c.req.json<{ checkedItemIds: number[]; notes?: string }>()
+  const [lab] = await db.select().from(schema.labs).where(eq(schema.labs.id, labId)).limit(1)
+  if (!lab) return c.json({ error: 'Lab not found' }, 404)
+  await db.insert(schema.cleaningSessions).values({
+    labId,
+    userId: currentUser.sub,
+    cleanerName: `${currentUser.firstName} ${currentUser.lastName}`,
+    checkedItems: checkedItemIds,
+    notes: notes?.trim() || null,
+  })
+  await db.update(schema.labs).set({ status: 'clean', updatedAt: new Date() }).where(eq(schema.labs.id, labId))
+  await auditLog(currentUser.sub, 'lab.cleaned', 'lab', labId, {
+    labName: lab.name,
+    cleanerName: `${currentUser.firstName} ${currentUser.lastName}`,
+    itemCount: checkedItemIds.length,
+    notes: notes?.trim() || null,
+  })
+  return c.json({ ok: true })
+})
+
+// ─── Lab history ──────────────────────────────────────────────────────────────
+
+app.get('/labs/:id/history', authMiddleware, adminMiddleware, async (c) => {
+  const id = Number(c.req.param('id'))
+  const events = await db.select().from(schema.auditLogs)
+    .where(and(eq(schema.auditLogs.targetType, 'lab'), eq(schema.auditLogs.targetId, id)))
+    .orderBy(desc(schema.auditLogs.createdAt))
+    .limit(60)
+  const actorIds = [...new Set(events.map(e => e.actorId).filter(Boolean))] as number[]
+  const actors = actorIds.length > 0
+    ? await db.select({ id: schema.users.id, firstName: schema.users.firstName, lastName: schema.users.lastName })
+        .from(schema.users)
+        .where(sql`${schema.users.id} = ANY(ARRAY[${sql.join(actorIds.map(i => sql`${i}`), sql`, `)}]::int[])`)
+    : []
+  return c.json(events.map(e => ({
+    id: `audit_${e.id}`,
+    type: e.action,
+    date: e.createdAt,
+    actor: actors.find(a => a.id === e.actorId) ?? null,
+    payload: e.payload as Record<string, any> | null,
+  })))
 })
 
 const handler = (req: Request) => app.fetch(req)

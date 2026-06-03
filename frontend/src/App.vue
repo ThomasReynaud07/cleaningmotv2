@@ -2,13 +2,15 @@
 import { onMounted, onUnmounted, ref, nextTick, computed } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 import { messagesApi, adminMessagesApi, type Message, type ThreadSummary } from '@/services/api'
 import {
   Sparkles, Settings, User, LogOut, Menu, X, ChevronDown,
-  MessageCircle, Send, Mail, ChevronLeft,
+  MessageCircle, Send, Mail, ChevronLeft, Moon, Sun,
 } from 'lucide-vue-next'
 
 const auth = useAuthStore()
+const theme = useThemeStore()
 const router = useRouter()
 const route = useRoute()
 const isAuthPage = computed(() => route.name === 'login' || route.name === 'register')
@@ -209,6 +211,10 @@ async function handleLogout() {
                   </div>
                 </div>
                 <div class="dropdown-divider"></div>
+                <button class="dropdown-item" @click="theme.toggle()">
+                  <Moon v-if="!theme.isDark" :size="15" /> <Sun v-else :size="15" />
+                  {{ theme.isDark ? 'Mode clair' : 'Mode sombre' }}
+                </button>
                 <RouterLink to="/profile" class="dropdown-item" @click="userMenuOpen = false">
                   <User :size="15" /> Mon profil
                 </RouterLink>
@@ -759,4 +765,76 @@ textarea.form-control { resize: vertical; min-height: 90px; }
   display: flex; align-items: center; justify-content: center;
   gap: 0.75rem; padding: 3rem; color: var(--gray-500); font-size: 0.875rem;
 }
+
+/* ─── DARK MODE ─── */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --primary: #60a5fa;
+  --primary-dark: #3b82f6;
+  --primary-light: #1e3a5f;
+  --success: #4ade80;
+  --success-light: #052e16;
+  --warning: #fbbf24;
+  --warning-light: #431407;
+  --danger: #f87171;
+  --danger-light: #450a0a;
+  --gray-50: #1e293b;
+  --gray-100: #253347;
+  --gray-200: #334155;
+  --gray-300: #475569;
+  --gray-400: #64748b;
+  --gray-500: #94a3b8;
+  --gray-600: #cbd5e1;
+  --gray-700: #e2e8f0;
+  --gray-800: #f1f5f9;
+  --gray-900: #f8fafc;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow: 0 1px 3px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.5);
+  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.5);
+}
+[data-theme="dark"] body { background: #0f172a; }
+[data-theme="dark"] .card { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .navbar { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .modal { background: #1e293b !important; }
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer { background: #162032 !important; border-color: #334155 !important; }
+[data-theme="dark"] .user-dropdown { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .user-dropdown-header { background: #162032 !important; }
+[data-theme="dark"] .user-dropdown-list { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .mobile-menu { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .chat-panel { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .chat-panel-header { background: #2d1b4e !important; border-color: #4c1d95 !important; }
+[data-theme="dark"] .chat-compose { background: #162032 !important; border-color: #334155 !important; }
+[data-theme="dark"] .chat-user-row { border-color: #334155 !important; }
+[data-theme="dark"] .chat-user-row:hover { background: #253347 !important; }
+[data-theme="dark"] .chat-user-row-unread { background: #1e2f4a !important; }
+[data-theme="dark"] .form-control { background: #0f172a !important; color: #f1f5f9 !important; border-color: #475569 !important; }
+[data-theme="dark"] .form-control::placeholder { color: #64748b !important; }
+[data-theme="dark"] .form-control:focus { border-color: #60a5fa !important; box-shadow: 0 0 0 3px rgba(96,165,250,0.15) !important; }
+[data-theme="dark"] .btn-outline { background: #1e293b !important; border-color: #475569 !important; color: #e2e8f0 !important; }
+[data-theme="dark"] .btn-outline:hover:not(:disabled) { background: #334155 !important; }
+[data-theme="dark"] .dropdown-item:hover { background: #253347 !important; }
+[data-theme="dark"] .auth-card { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .auth-page { background: linear-gradient(135deg, #1a2744 0%, #0f172a 100%) !important; }
+[data-theme="dark"] .profile-hero.card { background: #1e293b !important; }
+[data-theme="dark"] .panel.card { background: #1e293b !important; }
+[data-theme="dark"] .panel-head { border-color: #334155 !important; }
+[data-theme="dark"] .warn-item { background: #2d1a0e !important; border-color: #78350f !important; }
+[data-theme="dark"] .comment-item { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .report-card { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .comment-card { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .empty-panel { background: #1e293b !important; border-color: #334155 !important; }
+[data-theme="dark"] .type-option { border-color: #475569 !important; color: #cbd5e1 !important; }
+[data-theme="dark"] .type-option.active { background: #1e3a5f !important; border-color: #60a5fa !important; color: #93c5fd !important; }
+[data-theme="dark"] .file-upload-area { border-color: #475569 !important; color: #94a3b8 !important; }
+[data-theme="dark"] .nav-admin-btn { background: #253347 !important; border-color: #334155 !important; color: #cbd5e1 !important; }
+[data-theme="dark"] .nav-item:hover,
+[data-theme="dark"] .nav-item.router-link-active { background: #1e3a5f !important; }
+[data-theme="dark"] .user-menu:hover { background: #253347 !important; }
+[data-theme="dark"] .modal-overlay { background: rgba(0,0,0,0.7) !important; }
+[data-theme="dark"] .bubble-other { background: #334155 !important; color: #f1f5f9 !important; }
+[data-theme="dark"] .bubble-me { background: #3b82f6 !important; }
+[data-theme="dark"] .bubble-admin-me { background: #7c3aed !important; }
+[data-theme="dark"] a { color: inherit; }
 </style>

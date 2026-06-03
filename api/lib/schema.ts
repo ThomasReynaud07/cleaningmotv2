@@ -111,6 +111,24 @@ export const auditLogs = pgTable('audit_logs', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
 
+export const cleaningChecklistItems = pgTable('cleaning_checklist_items', {
+  id: serial('id').primaryKey(),
+  label: varchar('label', { length: 200 }).notNull(),
+  position: integer('position').default(0).notNull(),
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
+export const cleaningSessions = pgTable('cleaning_sessions', {
+  id: serial('id').primaryKey(),
+  labId: integer('lab_id').notNull().references(() => labs.id, { onDelete: 'cascade' }),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+  cleanerName: text('cleaner_name').notNull(),
+  checkedItems: json('checked_items').$type<number[]>().notNull(),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   reports: many(reports),

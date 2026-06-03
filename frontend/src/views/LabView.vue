@@ -3,11 +3,12 @@ import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLabsStore } from '@/stores/labs'
 import { useAuthStore } from '@/stores/auth'
-import { reportsApi, commentsApi, adminApi, profileApi, type Report, type UserBasic, getPhotoUrl } from '@/services/api'
+import { reportsApi, commentsApi, adminApi, profileApi, checklistApi, historyApi, type Report, type UserBasic, type ChecklistItem, type HistoryEvent, getPhotoUrl } from '@/services/api'
 import {
   ArrowLeft, AlertTriangle, CheckCircle2, XCircle, MessageSquare,
   Monitor, MapPin, Layers, Building2, Plus, Trash2,
   RefreshCw, Image, Paperclip, User, Lock, X, Search, ShieldAlert, QrCode,
+  ClipboardCheck, History, Clock,
 } from 'lucide-vue-next'
 import QRCode from 'qrcode'
 
@@ -43,6 +44,18 @@ const commentError = ref('')
 const showQrModal = ref(false)
 const qrDataUrl = ref('')
 
+// Checklist
+const showChecklistModal = ref(false)
+const checklistItems = ref<ChecklistItem[]>([])
+const checkedIds = ref<Set<number>>(new Set())
+const cleaningNotes = ref('')
+const cleaningLoading = ref(false)
+const allChecked = computed(() => checklistItems.value.filter(i => i.active).length > 0 && checklistItems.value.filter(i => i.active).every(i => checkedIds.value.has(i.id)))
+
+// History
+const historyEvents = ref<HistoryEvent[]>([])
+const historyLoading = ref(false)
+
 async function openQrModal() {
   const url = `${window.location.origin}/labs/${labId.value}`
   qrDataUrl.value = await QRCode.toDataURL(url, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
@@ -55,7 +68,11 @@ const quickWarnReason = ref('')
 const quickWarnLoading = ref(false)
 const quickWarnError = ref('')
 
-onMounted(() => store.fetchLab(labId.value))
+onMounted(async () => {
+  store.fetchLab(labId.value)
+  try { const { data } = await checklistApi.getItems(); checklistItems.value = data } catch {}
+  if (auth.isAdmin) loadHistory()
+})
 
 async function openReportModal() {
   showReportModal.value = true
@@ -136,9 +153,59 @@ async function deleteComment(id: number) {
 }
 
 async function markLabClean() {
-  if (!lab.value) return
-  await store.updateLabStatus(lab.value.id, 'clean')
-  await store.fetchLab(labId.value)
+  checkedIds.value = new Set()
+  cleaningNotes.value = ''
+  showChecklistModal.value = true
+}
+
+function toggleCheck(id: number) {
+  const s = new Set(checkedIds.value)
+  if (s.has(id)) s.delete(id); else s.add(id)
+  checkedIds.value = s
+}
+
+async function submitCleaning() {
+  if (!lab.value || !allChecked.value) return
+  cleaningLoading.value = true
+  try {
+    await checklistApi.submitCleaning(labId.value, {
+      checkedItemIds: [...checkedIds.value],
+      notes: cleaningNotes.value,
+    })
+    showChecklistModal.value = false
+    await store.fetchLab(labId.value)
+    loadHistory()
+  } finally { cleaningLoading.value = false }
+}
+
+async function loadHistory() {
+  historyLoading.value = true
+  try {
+    const { data } = await historyApi.getLabHistory(labId.value)
+    historyEvents.value = data
+  } catch {} finally { historyLoading.value = false }
+}
+
+const historyConfig: Record<string, { label: string; color: string }> = {
+  'lab.created': { label: 'Laboratoire créé', color: 'success' },
+  'lab.cleaned': { label: 'Nettoyage validé', color: 'success' },
+  'lab.status_changed': { label: 'Statut modifié', color: 'info' },
+  'lab.deleted': { label: 'Supprimé', color: 'danger' },
+}
+
+function historyLabel(type: string, payload: Record<string, any> | null): string {
+  if (type === 'lab.status_changed' && payload) {
+    const map: Record<string, string> = { clean: 'Propre', dirty: 'Sale', needs_attention: 'À vérifier' }
+    return `Statut → ${map[payload.newStatus] ?? payload.newStatus}`
+  }
+  if (type === 'lab.cleaned' && payload) {
+    return `Nettoyage validé (${payload.itemCount ?? '?'} points)${payload.notes ? ' — ' + payload.notes : ''}`
+  }
+  return historyConfig[type]?.label ?? type
+}
+
+function historyColor(type: string): string {
+  return historyConfig[type]?.color ?? 'info'
 }
 
 async function markLabAttention() {
@@ -202,7 +269,7 @@ async function submitQuickWarn() {
             <AlertTriangle :size="15" /> Signaler un problème
           </button>
           <button v-if="auth.isAdmin && lab.status !== 'clean'" class="btn btn-success" @click="markLabClean">
-            <CheckCircle2 :size="15" /> Marquer propre
+            <ClipboardCheck :size="15" /> Marquer propre
           </button>
           <button v-if="auth.isAdmin && lab.status !== 'needs_attention'" class="btn btn-warning-outline" @click="markLabAttention">
             <AlertTriangle :size="15" /> À vérifier
@@ -334,6 +401,35 @@ async function submitQuickWarn() {
           </div>
         </section>
       </div>
+
+      <!-- History (admin) -->
+      <section v-if="auth.isAdmin" class="history-section">
+        <div class="section-header">
+          <div class="section-title-row">
+            <History :size="16" style="color:var(--gray-400)" />
+            <h2>Historique</h2>
+          </div>
+        </div>
+        <div v-if="historyLoading" class="loading-center" style="padding:1.5rem">
+          <span class="spinner spinner-dark"></span>
+        </div>
+        <div v-else-if="!historyEvents.length" class="empty-panel">
+          <Clock :size="28" style="color:var(--gray-300)" />
+          <p>Aucun événement enregistré</p>
+        </div>
+        <div v-else class="timeline">
+          <div v-for="event in historyEvents" :key="event.id" class="timeline-item">
+            <div class="timeline-dot" :class="`dot-${historyColor(event.type)}`"></div>
+            <div class="timeline-content">
+              <div class="timeline-label">{{ historyLabel(event.type, event.payload) }}</div>
+              <div class="timeline-meta">
+                <span v-if="event.actor" class="timeline-actor">{{ event.actor.firstName }} {{ event.actor.lastName }}</span>
+                <span class="timeline-date">{{ formatDate(event.date) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </template>
 
     <!-- Report modal -->
@@ -505,6 +601,48 @@ async function submitQuickWarn() {
       </div>
     </div>
 
+    <!-- Cleaning checklist modal -->
+    <div v-if="showChecklistModal" class="modal-overlay" @click.self="showChecklistModal = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h3><ClipboardCheck :size="16" style="margin-right:0.35rem" /> Validation — {{ lab?.name }}</h3>
+          <button class="modal-close" @click="showChecklistModal = false"><X :size="14" /></button>
+        </div>
+        <div class="modal-body">
+          <div v-if="!checklistItems.filter(i => i.active).length" class="chat-empty">
+            <p>Aucun élément de checklist configuré.</p>
+          </div>
+          <div class="checklist-list">
+            <label
+              v-for="item in checklistItems.filter(i => i.active)"
+              :key="item.id"
+              class="checklist-row"
+              :class="{ 'checklist-row-checked': checkedIds.has(item.id) }"
+            >
+              <input type="checkbox" class="checklist-checkbox" :checked="checkedIds.has(item.id)" @change="toggleCheck(item.id)" />
+              <span class="checklist-label">{{ item.label }}</span>
+              <CheckCircle2 v-if="checkedIds.has(item.id)" :size="16" style="color:var(--success);flex-shrink:0;margin-left:auto" />
+            </label>
+          </div>
+          <div class="form-group" style="margin-top:1rem">
+            <label class="form-label">Notes <span style="font-weight:400;color:var(--gray-400)">(optionnel)</span></label>
+            <textarea v-model="cleaningNotes" class="form-control" rows="2" placeholder="Observations particulières..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <span class="checklist-progress">
+            {{ checkedIds.size }}/{{ checklistItems.filter(i => i.active).length }} points validés
+          </span>
+          <button type="button" class="btn btn-outline" @click="showChecklistModal = false">Annuler</button>
+          <button class="btn btn-success" :disabled="!allChecked || cleaningLoading" @click="submitCleaning">
+            <span v-if="cleaningLoading" class="spinner"></span>
+            <CheckCircle2 v-else :size="15" />
+            Confirmer le nettoyage
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Lightbox -->
     <div v-if="showPhotoModal" class="modal-overlay" @click="showPhotoModal = null">
       <div class="lightbox">
@@ -622,6 +760,40 @@ async function submitQuickWarn() {
 .lightbox-close { position: absolute; top: -0.75rem; right: -0.75rem; background: white; border: 1px solid var(--gray-200); width: 28px; height: 28px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* History timeline */
+.history-section { margin-top: 1.5rem; }
+.timeline { display: flex; flex-direction: column; gap: 0; }
+.timeline-item {
+  display: flex; align-items: flex-start; gap: 1rem;
+  padding: 0.75rem 0; border-bottom: 1px solid var(--gray-100); position: relative;
+}
+.timeline-item:last-child { border-bottom: none; }
+.timeline-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px;
+}
+.dot-success { background: var(--success); }
+.dot-info { background: var(--primary); }
+.dot-warning { background: var(--warning); }
+.dot-danger { background: var(--danger); }
+.timeline-content { flex: 1; min-width: 0; }
+.timeline-label { font-size: 0.875rem; font-weight: 500; color: var(--gray-800); }
+.timeline-meta { display: flex; gap: 0.75rem; align-items: center; margin-top: 0.15rem; flex-wrap: wrap; }
+.timeline-actor { font-size: 0.75rem; font-weight: 600; color: var(--primary); }
+.timeline-date { font-size: 0.72rem; color: var(--gray-400); }
+
+/* Checklist modal */
+.checklist-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.checklist-row {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.75rem 1rem; border: 1.5px solid var(--gray-200); border-radius: var(--radius-sm);
+  cursor: pointer; transition: all 0.15s; user-select: none;
+}
+.checklist-row:hover { border-color: var(--success); background: var(--success-light); }
+.checklist-row-checked { border-color: var(--success); background: var(--success-light); }
+.checklist-checkbox { width: 16px; height: 16px; accent-color: var(--success); flex-shrink: 0; cursor: pointer; }
+.checklist-label { font-size: 0.875rem; color: var(--gray-700); flex: 1; }
+.checklist-progress { font-size: 0.8rem; font-weight: 600; color: var(--gray-500); margin-right: auto; }
 
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
