@@ -949,6 +949,15 @@ app.get('/admin/messages', authMiddleware, adminMiddleware, async (c) => {
   return c.json(result)
 })
 
+// Admin: count unread (messages sent by users, not yet read) — MUST be before /:userId
+app.get('/admin/messages/unread', authMiddleware, adminMiddleware, async (c) => {
+  const [{ value }] = await db
+    .select({ value: count() })
+    .from(schema.messages)
+    .where(and(sql`${schema.messages.senderId} = ${schema.messages.userId}`, eq(schema.messages.isRead, false)))
+  return c.json({ unread: Number(value) })
+})
+
 // Admin: get user thread
 app.get('/admin/messages/:userId', authMiddleware, adminMiddleware, async (c) => {
   const userId = Number(c.req.param('userId'))
@@ -973,15 +982,6 @@ app.post('/admin/messages/:userId', authMiddleware, adminMiddleware, async (c) =
     .values({ userId, senderId: admin.sub, content: content.trim() })
     .returning()
   return c.json({ ...msg, fromMe: true, sender: { firstName: admin.firstName, lastName: admin.lastName } }, 201)
-})
-
-// Admin: count unread (messages sent by users, not yet read)
-app.get('/admin/messages/unread', authMiddleware, adminMiddleware, async (c) => {
-  const [{ value }] = await db
-    .select({ value: count() })
-    .from(schema.messages)
-    .where(and(eq(schema.messages.senderId, schema.messages.userId), eq(schema.messages.isRead, false)))
-  return c.json({ unread: Number(value) })
 })
 
 const handler = (req: Request) => app.fetch(req)
