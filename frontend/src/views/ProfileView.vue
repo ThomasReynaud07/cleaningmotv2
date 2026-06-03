@@ -245,8 +245,14 @@ function warnSeverity(count: number) {
 .comment-text { font-size: 0.875rem; color: var(--gray-700); line-height: 1.5; }
 
 @media (max-width: 768px) {
-  .profile-hero { flex-direction: column; align-items: flex-start; }
+  .profile-hero { flex-direction: column; align-items: flex-start; gap: 1rem; }
   .profile-grid { grid-template-columns: 1fr; }
-  .profile-stats { margin-top: 0.5rem; }
+  .profile-stats { margin-top: 0; }
+}
+@media (max-width: 480px) {
+  .profile-hero { padding: 1.25rem; }
+  .profile-name { font-size: 1.2rem; }
+  .profile-grid { gap: 1rem; }
+  .panel-body { padding: 1rem; }
 }
 </style>

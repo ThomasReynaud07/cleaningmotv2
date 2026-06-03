@@ -374,13 +374,16 @@ const statusConfig = {
 @media (max-width: 768px) {
   .stats-grid { grid-template-columns: repeat(2,1fr); }
   .building-grid { grid-template-columns: repeat(2,1fr); }
-  .toolbar { flex-direction: column; align-items: stretch; }
-  .toolbar-right { flex-wrap: wrap; }
+  .toolbar { flex-direction: column; align-items: stretch; gap: 0.75rem; }
+  .toolbar-right { flex-wrap: wrap; gap: 0.5rem; }
   .search-box { min-width: unset; }
+  .labs-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 }
 @media (max-width: 480px) {
-  .stats-grid { grid-template-columns: repeat(2,1fr); }
-  .building-grid { grid-template-columns: 1fr 1fr; }
+  .stats-grid { grid-template-columns: repeat(2,1fr); gap: 0.75rem; }
+  .building-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  .labs-grid { grid-template-columns: 1fr; }
   .two-inputs { grid-template-columns: 1fr; }
+  .toolbar-right { flex-direction: column; }
 }
 </style>

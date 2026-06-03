@@ -91,9 +91,10 @@ async function submit() {
 
 <style scoped>
 .auth-page {
-  min-height: calc(100vh - var(--nav-height));
+  min-height: 100vh;
   display: flex; align-items: center; justify-content: center;
   padding: 2rem 1rem;
+  padding-top: calc(var(--nav-height) + 2rem);
   background: linear-gradient(135deg, var(--primary-light) 0%, var(--gray-50) 100%);
 }
 .auth-card {
@@ -103,6 +104,11 @@ async function submit() {
   border-radius: var(--radius-lg);
   padding: 2.5rem 2rem;
   box-shadow: var(--shadow-lg);
+}
+@media (max-width: 480px) {
+  .auth-page { padding: 1rem; padding-top: calc(var(--nav-height) + 1rem); align-items: flex-start; }
+  .auth-card { padding: 2rem 1.25rem; border-radius: var(--radius); box-shadow: var(--shadow-md); }
+  .auth-header h1 { font-size: 1.3rem; }
 }
 .auth-brand {
   display: flex; align-items: center; gap: 0.5rem;

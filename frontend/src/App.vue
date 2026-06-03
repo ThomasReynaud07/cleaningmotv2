@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue'
-import { RouterView, useRouter } from 'vue-router'
+import { onMounted, onUnmounted, ref, nextTick, computed } from 'vue'
+import { RouterView, useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { messagesApi, adminMessagesApi, type Message, type ThreadSummary } from '@/services/api'
 import {
@@ -10,6 +10,8 @@ import {
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+const isAuthPage = computed(() => route.name === 'login' || route.name === 'register')
 const mobileOpen = ref(false)
 const userMenuOpen = ref(false)
 
@@ -166,7 +168,7 @@ async function handleLogout() {
           <span class="brand-text">ETML Cleaning</span>
         </RouterLink>
 
-        <nav class="navbar-center">
+        <nav v-if="!isAuthPage" class="navbar-center">
           <RouterLink to="/" class="nav-item">Laboratoires</RouterLink>
         </nav>
 
@@ -217,11 +219,11 @@ async function handleLogout() {
             </div>
           </template>
 
-          <template v-else>
+          <template v-else-if="!isAuthPage">
             <RouterLink to="/login" class="btn-login">Se connecter</RouterLink>
           </template>
 
-          <button class="mobile-toggle" @click="mobileOpen = !mobileOpen" aria-label="Menu">
+          <button v-if="!isAuthPage" class="mobile-toggle" @click="mobileOpen = !mobileOpen" aria-label="Menu">
             <X v-if="mobileOpen" :size="22" />
             <Menu v-else :size="22" />
           </button>
@@ -622,12 +624,32 @@ button { font-family: inherit; }
   .mobile-toggle { display: flex; }
   .navbar-center { display: none; }
   .nav-admin-btn, .user-menu, .btn-login, .chat-btn { display: none; }
-  .chat-panel { right: 0.5rem; left: 0.5rem; width: auto; }
+  .chat-panel {
+    position: fixed;
+    top: auto;
+    bottom: 0; left: 0; right: 0;
+    width: 100%;
+    height: 75vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    border-bottom: none;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .chat-compose { padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ─── MAIN ─── */
-.main-content { max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem; }
-@media (max-width: 640px) { .main-content { padding: 1rem; } }
+.main-content {
+  max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem;
+  padding-left: max(1.5rem, env(safe-area-inset-left));
+  padding-right: max(1.5rem, env(safe-area-inset-right));
+}
+@media (max-width: 640px) {
+  .main-content {
+    padding: 1rem;
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+}
 
 /* ─── GLOBAL UTILITIES ─── */
 .btn {

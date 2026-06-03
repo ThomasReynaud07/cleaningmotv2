@@ -104,9 +104,10 @@ async function submit() {
 
 <style scoped>
 .auth-page {
-  min-height: calc(100vh - var(--nav-height));
+  min-height: 100vh;
   display: flex; align-items: center; justify-content: center;
   padding: 2rem 1rem;
+  padding-top: calc(var(--nav-height) + 2rem);
   background: linear-gradient(135deg, var(--primary-light) 0%, var(--gray-50) 100%);
 }
 .auth-card {
@@ -131,5 +132,10 @@ async function submit() {
 .auth-footer { margin-top: 1.5rem; text-align: center; font-size: 0.875rem; color: var(--gray-500); }
 .auth-footer a { color: var(--primary); font-weight: 600; margin-left: 0.25rem; }
 .auth-footer a:hover { text-decoration: underline; }
-@media (max-width: 480px) { .name-row { grid-template-columns: 1fr; } }
+@media (max-width: 480px) {
+  .auth-page { padding: 1rem; padding-top: calc(var(--nav-height) + 1rem); align-items: flex-start; }
+  .auth-card { padding: 2rem 1.25rem; border-radius: var(--radius); box-shadow: var(--shadow-md); }
+  .auth-header h1 { font-size: 1.3rem; }
+  .name-row { grid-template-columns: 1fr; }
+}
 </style>
