@@ -903,6 +903,52 @@ app.post('/me/messages', authMiddleware, async (c) => {
   return c.json({ ...msg, fromMe: true, sender: { firstName: user.firstName, lastName: user.lastName } }, 201)
 })
 
+// Admin: list all threads with unread count + last message
+app.get('/admin/messages', authMiddleware, adminMiddleware, async (c) => {
+  const threadRows = await db
+    .selectDistinct({ userId: schema.messages.userId })
+    .from(schema.messages)
+
+  if (threadRows.length === 0) return c.json([])
+
+  const userIds = threadRows.map(r => r.userId)
+  const inArray = sql`${schema.messages.userId} = ANY(ARRAY[${sql.join(userIds.map(id => sql`${id}`), sql`, `)}]::int[])`
+
+  const [usersList, unreadRows, allMsgs] = await Promise.all([
+    db.select({ id: schema.users.id, firstName: schema.users.firstName, lastName: schema.users.lastName })
+      .from(schema.users)
+      .where(sql`${schema.users.id} = ANY(ARRAY[${sql.join(userIds.map(id => sql`${id}`), sql`, `)}]::int[])`),
+    db.select({ userId: schema.messages.userId, unread: count() })
+      .from(schema.messages)
+      .where(and(inArray, sql`${schema.messages.senderId} = ${schema.messages.userId}`, eq(schema.messages.isRead, false)))
+      .groupBy(schema.messages.userId),
+    db.select({ userId: schema.messages.userId, content: schema.messages.content, createdAt: schema.messages.createdAt })
+      .from(schema.messages)
+      .where(inArray)
+      .orderBy(desc(schema.messages.createdAt)),
+  ])
+
+  const result = userIds.map(userId => {
+    const user = usersList.find(u => u.id === userId)
+    const unreadRow = unreadRows.find(r => r.userId === userId)
+    const lastMsg = allMsgs.find(m => m.userId === userId)
+    return {
+      user: { id: userId, firstName: user?.firstName ?? '', lastName: user?.lastName ?? '' },
+      unreadCount: Number(unreadRow?.unread ?? 0),
+      lastMessage: (lastMsg?.content ?? '').slice(0, 80),
+      lastMessageAt: lastMsg?.createdAt ?? null,
+    }
+  }).sort((a, b) => {
+    if (a.unreadCount > 0 && b.unreadCount === 0) return -1
+    if (a.unreadCount === 0 && b.unreadCount > 0) return 1
+    const tA = a.lastMessageAt ? new Date(a.lastMessageAt as any).getTime() : 0
+    const tB = b.lastMessageAt ? new Date(b.lastMessageAt as any).getTime() : 0
+    return tB - tA
+  })
+
+  return c.json(result)
+})
+
 // Admin: get user thread
 app.get('/admin/messages/:userId', authMiddleware, adminMiddleware, async (c) => {
   const userId = Number(c.req.param('userId'))

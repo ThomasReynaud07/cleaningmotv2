@@ -178,7 +178,15 @@ export const messagesApi = {
   unreadCount: () => api.get<{ unread: number }>('/api/me/messages/unread'),
 }
 
+export interface ThreadSummary {
+  user: { id: number; firstName: string; lastName: string }
+  unreadCount: number
+  lastMessage: string
+  lastMessageAt: string | null
+}
+
 export const adminMessagesApi = {
+  listThreads: () => api.get<ThreadSummary[]>('/api/admin/messages'),
   getThread: (userId: number) => api.get<Message[]>(`/api/admin/messages/${userId}`),
   reply: (userId: number, content: string) => api.post<Message>(`/api/admin/messages/${userId}`, { content }),
   unreadCount: () => api.get<{ unread: number }>('/api/admin/messages/unread'),

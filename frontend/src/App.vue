@@ -2,10 +2,10 @@
 import { onMounted, onUnmounted, ref, nextTick } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { messagesApi, type Message } from '@/services/api'
+import { messagesApi, adminMessagesApi, type Message, type ThreadSummary } from '@/services/api'
 import {
   Sparkles, Settings, User, LogOut, Menu, X, ChevronDown,
-  MessageCircle, Send, Mail,
+  MessageCircle, Send, Mail, ChevronLeft,
 } from 'lucide-vue-next'
 
 const auth = useAuthStore()
@@ -13,26 +13,56 @@ const router = useRouter()
 const mobileOpen = ref(false)
 const userMenuOpen = ref(false)
 
-// ─── Chat bubble ─────────────────────────────────────────────────────────────
+// ─── Chat (shared) ───────────────────────────────────────────────────────────
 const chatOpen = ref(false)
-const chatMessages = ref<Message[]>([])
 const chatUnread = ref(0)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+// ─── Chat (non-admin user) ───────────────────────────────────────────────────
+const chatMessages = ref<Message[]>([])
 const chatLoading = ref(false)
 const chatNewMsg = ref('')
 const chatSending = ref(false)
 const chatThreadRef = ref<HTMLElement | null>(null)
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// ─── Chat (admin) ────────────────────────────────────────────────────────────
+const adminChatView = ref<'list' | 'thread'>('list')
+const adminChatUsers = ref<ThreadSummary[]>([])
+const adminSelectedUser = ref<{ id: number; firstName: string; lastName: string } | null>(null)
+const adminChatMessages = ref<Message[]>([])
+const adminChatLoading = ref(false)
+const adminChatNewMsg = ref('')
+const adminChatSending = ref(false)
+const adminChatThreadRef = ref<HTMLElement | null>(null)
+
+// ─── Unread polling ───────────────────────────────────────────────────────────
 async function fetchUnread() {
-  if (!auth.isLoggedIn || auth.isAdmin) return
+  if (!auth.isLoggedIn) return
   try {
-    const { data } = await messagesApi.unreadCount()
-    chatUnread.value = data.unread
+    if (auth.isAdmin) {
+      const { data } = await adminMessagesApi.unreadCount()
+      chatUnread.value = data.unread
+    } else {
+      const { data } = await messagesApi.unreadCount()
+      chatUnread.value = data.unread
+    }
   } catch {}
 }
 
-async function openChat() {
+// ─── Toggle bubble ────────────────────────────────────────────────────────────
+async function toggleChat() {
+  if (chatOpen.value) { chatOpen.value = false; return }
   chatOpen.value = true
+  if (auth.isAdmin) {
+    adminChatView.value = 'list'
+    await loadAdminList()
+  } else {
+    await loadUserThread()
+  }
+}
+
+// ─── User thread ──────────────────────────────────────────────────────────────
+async function loadUserThread() {
   chatLoading.value = true
   try {
     const { data } = await messagesApi.getThread()
@@ -40,17 +70,7 @@ async function openChat() {
     chatUnread.value = 0
     await nextTick()
     chatThreadRef.value?.scrollTo({ top: chatThreadRef.value.scrollHeight })
-  } finally {
-    chatLoading.value = false
-  }
-}
-
-function toggleChat() {
-  if (chatOpen.value) {
-    chatOpen.value = false
-  } else {
-    openChat()
-  }
+  } finally { chatLoading.value = false }
 }
 
 async function sendChatMessage() {
@@ -62,11 +82,46 @@ async function sendChatMessage() {
     chatNewMsg.value = ''
     await nextTick()
     chatThreadRef.value?.scrollTo({ top: chatThreadRef.value.scrollHeight, behavior: 'smooth' })
-  } finally {
-    chatSending.value = false
-  }
+  } finally { chatSending.value = false }
 }
 
+// ─── Admin: list + thread ─────────────────────────────────────────────────────
+async function loadAdminList() {
+  adminChatLoading.value = true
+  try {
+    const { data } = await adminMessagesApi.listThreads()
+    adminChatUsers.value = data
+  } finally { adminChatLoading.value = false }
+}
+
+async function openAdminThread(user: { id: number; firstName: string; lastName: string }) {
+  adminSelectedUser.value = user
+  adminChatView.value = 'thread'
+  adminChatLoading.value = true
+  try {
+    const { data } = await adminMessagesApi.getThread(user.id)
+    adminChatMessages.value = data
+    const t = adminChatUsers.value.find(t => t.user.id === user.id)
+    if (t) t.unreadCount = 0
+    chatUnread.value = adminChatUsers.value.reduce((s, t) => s + t.unreadCount, 0)
+    await nextTick()
+    adminChatThreadRef.value?.scrollTo({ top: adminChatThreadRef.value.scrollHeight })
+  } finally { adminChatLoading.value = false }
+}
+
+async function sendAdminMessage() {
+  if (!adminSelectedUser.value || !adminChatNewMsg.value.trim() || adminChatSending.value) return
+  adminChatSending.value = true
+  try {
+    const { data } = await adminMessagesApi.reply(adminSelectedUser.value.id, adminChatNewMsg.value)
+    adminChatMessages.value.push(data)
+    adminChatNewMsg.value = ''
+    await nextTick()
+    adminChatThreadRef.value?.scrollTo({ top: adminChatThreadRef.value.scrollHeight, behavior: 'smooth' })
+  } finally { adminChatSending.value = false }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatDate(d: string) {
   return new Intl.DateTimeFormat('fr-CH', {
     day: '2-digit', month: 'short', year: 'numeric',
@@ -74,19 +129,25 @@ function formatDate(d: string) {
   }).format(new Date(d))
 }
 
-// ─── Lifecycle ────────────────────────────────────────────────────────────────
+function formatShortDate(d: string | null) {
+  if (!d) return ''
+  const date = new Date(d)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString())
+    return new Intl.DateTimeFormat('fr-CH', { hour: '2-digit', minute: '2-digit' }).format(date)
+  return new Intl.DateTimeFormat('fr-CH', { day: '2-digit', month: 'short' }).format(date)
+}
 
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
 onMounted(async () => {
   await auth.fetchMe()
-  if (auth.isLoggedIn && !auth.isAdmin) {
+  if (auth.isLoggedIn) {
     fetchUnread()
     pollTimer = setInterval(fetchUnread, 30_000)
   }
 })
 
-onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer)
-})
+onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 
 async function handleLogout() {
   await auth.logout()
@@ -101,9 +162,7 @@ async function handleLogout() {
     <header class="navbar">
       <div class="navbar-inner">
         <RouterLink to="/" class="navbar-brand" @click="mobileOpen = false">
-          <div class="brand-icon-wrap">
-            <Sparkles :size="18" />
-          </div>
+          <div class="brand-icon-wrap"><Sparkles :size="18" /></div>
           <span class="brand-text">ETML Cleaning</span>
         </RouterLink>
 
@@ -114,13 +173,11 @@ async function handleLogout() {
         <div class="navbar-right">
           <template v-if="auth.isLoggedIn && auth.user">
             <RouterLink v-if="auth.isAdmin" to="/admin" class="nav-admin-btn">
-              <Settings :size="15" />
-              Admin
+              <Settings :size="15" /> Admin
             </RouterLink>
 
-            <!-- Chat bubble (non-admins only) -->
+            <!-- Chat bubble (tous les users connectés) -->
             <button
-              v-if="!auth.isAdmin"
               class="chat-btn"
               :class="{ 'chat-btn-active': chatOpen }"
               @click="toggleChat"
@@ -192,58 +249,119 @@ async function handleLogout() {
       </div>
     </header>
 
-    <!-- Chat panel backdrop -->
+    <!-- Backdrop -->
     <div v-if="chatOpen" class="chat-backdrop" @click="chatOpen = false"></div>
 
-    <!-- Chat panel -->
-    <div v-if="chatOpen && auth.isLoggedIn && !auth.isAdmin" class="chat-panel card">
-      <div class="chat-panel-header">
-        <div class="chat-panel-title">
-          <MessageCircle :size="16" style="color:#7c3aed" />
-          <span>Messages — Administration</span>
-        </div>
-        <button class="modal-close" @click="chatOpen = false"><X :size="14" /></button>
-      </div>
-      <div class="chat-panel-thread" ref="chatThreadRef">
-        <div v-if="chatLoading" class="chat-loading">
-          <span class="spinner spinner-dark"></span>
-        </div>
-        <div v-else-if="!chatMessages.length" class="chat-empty">
-          <Mail :size="28" style="color:var(--gray-300);display:block;margin:0 auto 0.5rem" />
-          <p>Aucun message. Écrivez pour contacter un administrateur.</p>
-        </div>
-        <template v-else>
-          <div
-            v-for="m in chatMessages"
-            :key="m.id"
-            class="bubble-row"
-            :class="m.fromMe ? 'bubble-row-right' : 'bubble-row-left'"
-          >
-            <div class="bubble" :class="m.fromMe ? 'bubble-me' : 'bubble-other'">
-              <div class="bubble-sender">{{ m.fromMe ? 'Moi' : m.sender.firstName + ' ' + m.sender.lastName }}</div>
-              <div class="bubble-text">{{ m.content }}</div>
-              <div class="bubble-time">{{ formatDate(m.createdAt) }}</div>
-            </div>
+    <!-- ─── Chat panel ─── -->
+    <div v-if="chatOpen && auth.isLoggedIn" class="chat-panel card">
+
+      <!-- ══ Mode USER ══ -->
+      <template v-if="!auth.isAdmin">
+        <div class="chat-panel-header">
+          <div class="chat-panel-title">
+            <MessageCircle :size="15" style="color:#7c3aed" />
+            <span>Messages — Administration</span>
           </div>
-        </template>
-      </div>
-      <div class="chat-compose">
-        <textarea
-          v-model="chatNewMsg"
-          class="form-control chat-input"
-          rows="2"
-          placeholder="Votre message… (Ctrl+Entrée pour envoyer)"
-          @keydown.ctrl.enter="sendChatMessage"
-        ></textarea>
-        <button
-          class="btn btn-primary chat-send"
-          @click="sendChatMessage"
-          :disabled="!chatNewMsg.trim() || chatSending"
-        >
-          <span v-if="chatSending" class="spinner"></span>
-          <Send v-else :size="14" />
-        </button>
-      </div>
+          <button class="modal-close" @click="chatOpen = false"><X :size="14" /></button>
+        </div>
+        <div class="chat-panel-thread" ref="chatThreadRef">
+          <div v-if="chatLoading" class="chat-loading"><span class="spinner spinner-dark"></span></div>
+          <div v-else-if="!chatMessages.length" class="chat-empty">
+            <Mail :size="28" style="color:var(--gray-300);display:block;margin:0 auto 0.5rem" />
+            <p>Aucun message.<br>Écrivez pour contacter un administrateur.</p>
+          </div>
+          <template v-else>
+            <div v-for="m in chatMessages" :key="m.id" class="bubble-row" :class="m.fromMe ? 'bubble-row-right' : 'bubble-row-left'">
+              <div class="bubble" :class="m.fromMe ? 'bubble-me' : 'bubble-other'">
+                <div class="bubble-sender">{{ m.fromMe ? 'Moi' : m.sender.firstName + ' ' + m.sender.lastName }}</div>
+                <div class="bubble-text">{{ m.content }}</div>
+                <div class="bubble-time">{{ formatDate(m.createdAt) }}</div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="chat-compose">
+          <textarea v-model="chatNewMsg" class="form-control chat-input" rows="2" placeholder="Votre message… (Ctrl+Entrée)" @keydown.ctrl.enter="sendChatMessage"></textarea>
+          <button class="btn btn-primary chat-send" @click="sendChatMessage" :disabled="!chatNewMsg.trim() || chatSending">
+            <span v-if="chatSending" class="spinner"></span>
+            <Send v-else :size="14" />
+          </button>
+        </div>
+      </template>
+
+      <!-- ══ Mode ADMIN — liste des fils ══ -->
+      <template v-else-if="adminChatView === 'list'">
+        <div class="chat-panel-header">
+          <div class="chat-panel-title">
+            <MessageCircle :size="15" style="color:#7c3aed" />
+            <span>Messages utilisateurs</span>
+            <span v-if="chatUnread > 0" class="chat-panel-badge">{{ chatUnread }}</span>
+          </div>
+          <button class="modal-close" @click="chatOpen = false"><X :size="14" /></button>
+        </div>
+        <div class="chat-panel-thread chat-list-thread">
+          <div v-if="adminChatLoading" class="chat-loading"><span class="spinner spinner-dark"></span></div>
+          <div v-else-if="!adminChatUsers.length" class="chat-empty">
+            <Mail :size="28" style="color:var(--gray-300);display:block;margin:0 auto 0.5rem" />
+            <p>Aucun message reçu pour l'instant.</p>
+          </div>
+          <button
+            v-else
+            v-for="t in adminChatUsers"
+            :key="t.user.id"
+            class="chat-user-row"
+            :class="{ 'chat-user-row-unread': t.unreadCount > 0 }"
+            @click="openAdminThread(t.user)"
+          >
+            <div class="chat-user-avatar">{{ t.user.firstName[0] }}{{ t.user.lastName[0] }}</div>
+            <div class="chat-user-info">
+              <div class="chat-user-name">
+                {{ t.user.firstName }} {{ t.user.lastName }}
+                <span v-if="t.unreadCount > 0" class="chat-unread-pill">{{ t.unreadCount }}</span>
+              </div>
+              <div class="chat-user-preview">{{ t.lastMessage }}</div>
+            </div>
+            <div class="chat-user-time">{{ formatShortDate(t.lastMessageAt) }}</div>
+          </button>
+        </div>
+      </template>
+
+      <!-- ══ Mode ADMIN — fil d'un user ══ -->
+      <template v-else>
+        <div class="chat-panel-header">
+          <button class="chat-back-btn" @click="adminChatView = 'list'">
+            <ChevronLeft :size="16" />
+          </button>
+          <div class="chat-panel-title" style="flex:1">
+            {{ adminSelectedUser?.firstName }} {{ adminSelectedUser?.lastName }}
+          </div>
+          <button class="modal-close" @click="chatOpen = false"><X :size="14" /></button>
+        </div>
+        <div class="chat-panel-thread" ref="adminChatThreadRef">
+          <div v-if="adminChatLoading" class="chat-loading"><span class="spinner spinner-dark"></span></div>
+          <div v-else-if="!adminChatMessages.length" class="chat-empty">
+            <Mail :size="28" style="color:var(--gray-300);display:block;margin:0 auto 0.5rem" />
+            <p>Aucun message dans ce fil.</p>
+          </div>
+          <template v-else>
+            <div v-for="m in adminChatMessages" :key="m.id" class="bubble-row" :class="m.fromMe ? 'bubble-row-right' : 'bubble-row-left'">
+              <div class="bubble" :class="m.fromMe ? 'bubble-admin-me' : 'bubble-other'">
+                <div class="bubble-sender">{{ m.fromMe ? 'Vous' : m.sender.firstName + ' ' + m.sender.lastName }}</div>
+                <div class="bubble-text">{{ m.content }}</div>
+                <div class="bubble-time">{{ formatDate(m.createdAt) }}</div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="chat-compose">
+          <textarea v-model="adminChatNewMsg" class="form-control chat-input" rows="2" placeholder="Répondre… (Ctrl+Entrée)" @keydown.ctrl.enter="sendAdminMessage"></textarea>
+          <button class="btn btn-primary chat-send" @click="sendAdminMessage" :disabled="!adminChatNewMsg.trim() || adminChatSending">
+            <span v-if="adminChatSending" class="spinner"></span>
+            <Send v-else :size="14" />
+          </button>
+        </div>
+      </template>
+
     </div>
 
     <main class="main-content">
@@ -288,89 +406,52 @@ async function handleLogout() {
 }
 
 html { scroll-behavior: smooth; }
-
 body {
-  font-family: var(--font);
-  background: var(--gray-50);
-  color: var(--gray-900);
-  min-height: 100vh;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+  font-family: var(--font); background: var(--gray-50); color: var(--gray-900);
+  min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
 }
-
 a { text-decoration: none; color: inherit; }
 button { font-family: inherit; }
 
 /* ─── NAVBAR ─── */
 .navbar {
-  background: white;
-  border-bottom: 1px solid var(--gray-200);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  box-shadow: var(--shadow-sm);
+  background: white; border-bottom: 1px solid var(--gray-200);
+  position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow-sm);
 }
 .navbar-inner {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 0 1.5rem;
-  height: var(--nav-height);
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
+  max-width: 1280px; margin: 0 auto; padding: 0 1.5rem;
+  height: var(--nav-height); display: flex; align-items: center; gap: 1.5rem;
 }
 .navbar-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--gray-900);
-  flex-shrink: 0;
+  display: flex; align-items: center; gap: 0.6rem;
+  font-size: 1.1rem; font-weight: 700; color: var(--gray-900); flex-shrink: 0;
 }
 .brand-icon-wrap {
-  width: 32px; height: 32px;
-  background: var(--primary);
-  border-radius: var(--radius-sm);
-  display: flex; align-items: center; justify-content: center;
-  color: white;
+  width: 32px; height: 32px; background: var(--primary); border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center; color: white;
 }
 .navbar-center { display: flex; align-items: center; gap: 0.25rem; flex: 1; }
 .nav-item {
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--gray-600);
-  transition: all 0.15s;
+  padding: 0.4rem 0.75rem; border-radius: var(--radius-sm);
+  font-size: 0.875rem; font-weight: 500; color: var(--gray-600); transition: all 0.15s;
 }
 .nav-item:hover, .nav-item.router-link-active { color: var(--primary); background: var(--primary-light); }
-
 .navbar-right { display: flex; align-items: center; gap: 0.75rem; margin-left: auto; }
-
 .nav-admin-btn {
   display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.4rem 0.85rem;
-  background: var(--gray-100);
-  border: 1px solid var(--gray-200);
-  border-radius: var(--radius-sm);
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--gray-700);
-  transition: all 0.15s;
+  padding: 0.4rem 0.85rem; background: var(--gray-100);
+  border: 1px solid var(--gray-200); border-radius: var(--radius-sm);
+  font-size: 0.8rem; font-weight: 600; color: var(--gray-700); transition: all 0.15s;
 }
 .nav-admin-btn:hover { background: var(--gray-200); }
 .nav-admin-btn.router-link-active { background: var(--primary-light); color: var(--primary); border-color: #bfdbfe; }
 
-/* ─── Chat bubble ─── */
+/* ─── Chat bubble button ─── */
 .chat-btn {
-  position: relative;
-  background: none; border: none; cursor: pointer;
+  position: relative; background: none; border: none; cursor: pointer;
   width: 36px; height: 36px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  color: var(--gray-500);
-  transition: all 0.15s;
-  flex-shrink: 0;
+  color: var(--gray-500); transition: all 0.15s; flex-shrink: 0;
 }
 .chat-btn:hover { background: var(--gray-100); color: var(--gray-700); }
 .chat-btn.chat-btn-active { color: #7c3aed; background: #f5f3ff; }
@@ -380,41 +461,37 @@ button { font-family: inherit; }
   min-width: 16px; height: 16px; border-radius: 999px;
   font-size: 0.6rem; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
-  padding: 0 3px;
-  border: 2px solid white;
+  padding: 0 3px; border: 2px solid white;
 }
 
 /* ─── Chat panel ─── */
-.chat-backdrop {
-  position: fixed; inset: 0;
-  z-index: 150;
-}
+.chat-backdrop { position: fixed; inset: 0; z-index: 150; }
 .chat-panel {
-  position: fixed;
-  top: calc(var(--nav-height) + 10px);
-  right: 1rem;
-  width: 340px;
-  height: 480px;
-  z-index: 200;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  position: fixed; top: calc(var(--nav-height) + 10px); right: 1rem;
+  width: 340px; height: 480px; z-index: 200;
+  display: flex; flex-direction: column; overflow: hidden;
   animation: slideUp 0.2s ease;
 }
 .chat-panel-header {
-  padding: 0.875rem 1rem;
-  border-bottom: 1px solid var(--gray-200);
-  background: #f5f3ff;
-  display: flex; align-items: center; justify-content: space-between;
-  flex-shrink: 0;
+  padding: 0.75rem 1rem; border-bottom: 1px solid var(--gray-200); background: #f5f3ff;
+  display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;
 }
-.chat-panel-title { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-weight: 600; color: var(--gray-800); }
+.chat-panel-title {
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.85rem; font-weight: 600; color: var(--gray-800); flex: 1;
+}
+.chat-panel-badge {
+  background: var(--danger); color: white; min-width: 18px; height: 18px;
+  border-radius: 999px; font-size: 0.62rem; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0 4px;
+}
 .chat-panel-thread {
   flex: 1; overflow-y: auto; padding: 0.875rem;
   display: flex; flex-direction: column; gap: 0.625rem;
 }
+.chat-list-thread { padding: 0; gap: 0; }
 .chat-loading { display: flex; justify-content: center; padding: 1.5rem; }
-.chat-empty { text-align: center; padding: 2rem 1rem; color: var(--gray-400); font-size: 0.8rem; line-height: 1.5; }
+.chat-empty { text-align: center; padding: 2rem 1rem; color: var(--gray-400); font-size: 0.8rem; line-height: 1.6; }
 .chat-compose {
   display: flex; gap: 0.5rem; padding: 0.75rem 0.875rem;
   border-top: 1px solid var(--gray-200); background: var(--gray-50);
@@ -422,116 +499,120 @@ button { font-family: inherit; }
 }
 .chat-input { flex: 1; resize: none; font-size: 0.8rem; min-height: unset; }
 .chat-send { flex-shrink: 0; height: 34px; padding: 0 0.75rem; }
+.chat-back-btn {
+  background: none; border: none; cursor: pointer; color: var(--gray-500);
+  display: flex; align-items: center; padding: 0.2rem; border-radius: 4px;
+  transition: all 0.15s; flex-shrink: 0;
+}
+.chat-back-btn:hover { color: var(--gray-800); background: rgba(0,0,0,0.06); }
 
-/* ─── Bubble UI (used by chat panel + AdminView) ─── */
+/* Admin chat user list */
+.chat-user-row {
+  display: flex; align-items: center; gap: 0.75rem;
+  width: 100%; padding: 0.875rem 1rem;
+  border: none; background: none; cursor: pointer; text-align: left;
+  border-bottom: 1px solid var(--gray-100); transition: background 0.1s;
+  font-family: inherit;
+}
+.chat-user-row:hover { background: var(--gray-50); }
+.chat-user-row:last-child { border-bottom: none; }
+.chat-user-row-unread { background: #fafafe; }
+.chat-user-row-unread:hover { background: #f3f0ff; }
+.chat-user-avatar {
+  width: 36px; height: 36px; border-radius: 50%; background: var(--primary); color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; flex-shrink: 0;
+}
+.chat-user-info { flex: 1; min-width: 0; }
+.chat-user-name {
+  font-size: 0.85rem; font-weight: 600; color: var(--gray-900);
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.chat-unread-pill {
+  background: var(--primary); color: white; min-width: 16px; height: 16px;
+  border-radius: 999px; font-size: 0.6rem; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0 3px;
+}
+.chat-user-preview {
+  font-size: 0.78rem; color: var(--gray-400);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.1rem;
+}
+.chat-user-time { font-size: 0.72rem; color: var(--gray-400); flex-shrink: 0; }
+
+/* ─── Bubble UI ─── */
 .bubble-row { display: flex; }
 .bubble-row-right { justify-content: flex-end; }
 .bubble-row-left { justify-content: flex-start; }
 .bubble { max-width: 75%; padding: 0.55rem 0.8rem; border-radius: 12px; }
 .bubble-me { background: var(--primary); color: white; border-bottom-right-radius: 3px; }
+.bubble-admin-me { background: #7c3aed; color: white; border-bottom-right-radius: 3px; }
 .bubble-other { background: var(--gray-100); color: var(--gray-900); border-bottom-left-radius: 3px; }
-.bubble-admin-purple { background: #7c3aed; color: white; border-bottom-right-radius: 3px; }
 .bubble-sender { font-size: 0.68rem; font-weight: 600; margin-bottom: 0.2rem; opacity: 0.75; }
 .bubble-text { font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; }
 .bubble-time { font-size: 0.65rem; margin-top: 0.25rem; opacity: 0.6; text-align: right; }
 
-/* ─── Avatar with photo ─── */
+/* Avatar photo */
 .avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 
 /* User menu */
 .user-menu {
-  position: relative;
-  display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.35rem 0.6rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.15s;
-  user-select: none;
+  position: relative; display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.35rem 0.6rem; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background 0.15s; user-select: none;
 }
 .user-menu:hover { background: var(--gray-100); }
 .user-name-text { font-size: 0.85rem; font-weight: 500; color: var(--gray-700); }
 .chevron { color: var(--gray-400); transition: transform 0.2s; }
 .chevron.rotated { transform: rotate(180deg); }
-
 .user-avatar {
-  width: 30px; height: 30px;
-  background: var(--primary);
-  border-radius: 50%;
+  width: 30px; height: 30px; background: var(--primary); border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 0.7rem; font-weight: 700; color: white; text-transform: uppercase; flex-shrink: 0;
-  overflow: hidden;
+  font-size: 0.7rem; font-weight: 700; color: white;
+  text-transform: uppercase; flex-shrink: 0; overflow: hidden;
 }
 .user-avatar.avatar-lg { width: 40px; height: 40px; font-size: 0.85rem; }
 .avatar-admin { background: #b45309; }
-
 .user-dropdown {
-  position: absolute;
-  top: calc(100% + 8px); right: 0;
-  background: white;
-  border: 1px solid var(--gray-200);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
-  min-width: 220px;
-  z-index: 200;
-  overflow: hidden;
+  position: absolute; top: calc(100% + 8px); right: 0;
+  background: white; border: 1px solid var(--gray-200);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  min-width: 220px; z-index: 200; overflow: hidden;
 }
 .user-dropdown-header {
   display: flex; align-items: center; gap: 0.75rem;
-  padding: 1rem;
-  background: var(--gray-50);
+  padding: 1rem; background: var(--gray-50);
 }
 .dropdown-name { font-size: 0.875rem; font-weight: 600; color: var(--gray-900); }
 .dropdown-email { font-size: 0.75rem; color: var(--gray-500); }
 .dropdown-divider { height: 1px; background: var(--gray-200); }
 .dropdown-item {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.65rem 1rem;
-  font-size: 0.85rem; font-weight: 500;
-  color: var(--gray-700);
-  background: none; border: none;
-  width: 100%; text-align: left;
-  cursor: pointer;
-  transition: background 0.1s;
-  font-family: inherit;
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.65rem 1rem;
+  font-size: 0.85rem; font-weight: 500; color: var(--gray-700);
+  background: none; border: none; width: 100%; text-align: left;
+  cursor: pointer; transition: background 0.1s; font-family: inherit;
 }
 .dropdown-item:hover { background: var(--gray-50); }
 .dropdown-item-danger { color: var(--danger); }
 .dropdown-item-danger:hover { background: var(--danger-light); }
-
 .btn-login {
-  padding: 0.45rem 1rem;
-  background: var(--primary);
-  color: white;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
-  font-weight: 500;
-  transition: background 0.15s;
+  padding: 0.45rem 1rem; background: var(--primary); color: white;
+  border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: background 0.15s;
 }
 .btn-login:hover { background: var(--primary-dark); }
-
 .mobile-toggle {
-  display: none;
-  background: none; border: none;
-  color: var(--gray-600); cursor: pointer;
-  padding: 0.25rem; border-radius: var(--radius-sm);
+  display: none; background: none; border: none; color: var(--gray-600);
+  cursor: pointer; padding: 0.25rem; border-radius: var(--radius-sm);
 }
 .mobile-menu {
-  display: none;
-  flex-direction: column;
-  border-top: 1px solid var(--gray-200);
-  padding: 0.5rem 1rem 1rem;
-  gap: 0.25rem;
+  display: none; flex-direction: column; border-top: 1px solid var(--gray-200);
+  padding: 0.5rem 1rem 1rem; gap: 0.25rem;
 }
 .mobile-menu.open { display: flex; }
 .mobile-link {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.65rem 0.75rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem; font-weight: 500;
-  color: var(--gray-700);
-  background: none; border: none;
-  width: 100%; text-align: left; cursor: pointer;
-  font-family: inherit; transition: background 0.1s;
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-sm); font-size: 0.9rem; font-weight: 500;
+  color: var(--gray-700); background: none; border: none;
+  width: 100%; text-align: left; cursor: pointer; font-family: inherit; transition: background 0.1s;
 }
 .mobile-link:hover { background: var(--gray-100); }
 .mobile-link-danger { color: var(--danger); }
@@ -545,23 +626,15 @@ button { font-family: inherit; }
 }
 
 /* ─── MAIN ─── */
-.main-content {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem 1.5rem;
-}
+.main-content { max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem; }
 @media (max-width: 640px) { .main-content { padding: 1rem; } }
 
 /* ─── GLOBAL UTILITIES ─── */
 .btn {
   display: inline-flex; align-items: center; gap: 0.45rem;
-  padding: 0.5rem 1rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem; font-weight: 500;
-  cursor: pointer; border: none;
-  transition: all 0.15s;
-  font-family: inherit;
-  white-space: nowrap;
+  padding: 0.5rem 1rem; border-radius: var(--radius-sm);
+  font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none;
+  transition: all 0.15s; font-family: inherit; white-space: nowrap;
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary { background: var(--primary); color: white; }
@@ -570,10 +643,7 @@ button { font-family: inherit; }
 .btn-danger:hover:not(:disabled) { background: #b91c1c; }
 .btn-success { background: var(--success); color: white; }
 .btn-success:hover:not(:disabled) { background: #15803d; }
-.btn-outline {
-  background: white; color: var(--gray-700);
-  border: 1px solid var(--gray-200);
-}
+.btn-outline { background: white; color: var(--gray-700); border: 1px solid var(--gray-200); }
 .btn-outline:hover:not(:disabled) { background: var(--gray-50); border-color: var(--gray-300); }
 .btn-warning-outline { background: white; color: #92400e; border: 1px solid #fde68a; }
 .btn-warning-outline:hover:not(:disabled) { background: #fffbeb; border-color: #fbbf24; }
@@ -583,10 +653,8 @@ button { font-family: inherit; }
 .btn-lg { padding: 0.65rem 1.25rem; font-size: 0.95rem; }
 
 .badge {
-  display: inline-flex; align-items: center; gap: 0.3rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 999px;
-  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.6rem;
+  border-radius: 999px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
 }
 .badge-clean { background: #dcfce7; color: #166534; }
 .badge-dirty { background: #fee2e2; color: #991b1b; }
@@ -596,30 +664,20 @@ button { font-family: inherit; }
 .badge-ignored { background: var(--gray-100); color: var(--gray-500); }
 
 .card {
-  background: white;
-  border: 1px solid var(--gray-200);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  background: white; border: 1px solid var(--gray-200);
+  border-radius: var(--radius); box-shadow: var(--shadow);
 }
 
 .form-group { margin-bottom: 1.1rem; }
 .form-label {
-  display: block;
-  font-size: 0.8rem; font-weight: 600;
-  margin-bottom: 0.4rem;
-  color: var(--gray-700);
-  letter-spacing: 0.01em;
+  display: block; font-size: 0.8rem; font-weight: 600;
+  margin-bottom: 0.4rem; color: var(--gray-700); letter-spacing: 0.01em;
 }
 .form-control {
-  width: 100%;
-  padding: 0.55rem 0.875rem;
-  border: 1px solid var(--gray-300);
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem; font-family: inherit;
-  color: var(--gray-900);
-  background: white;
-  transition: all 0.15s;
-  outline: none;
+  width: 100%; padding: 0.55rem 0.875rem;
+  border: 1px solid var(--gray-300); border-radius: var(--radius-sm);
+  font-size: 0.875rem; font-family: inherit; color: var(--gray-900);
+  background: white; transition: all 0.15s; outline: none;
 }
 .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
 .form-control::placeholder { color: var(--gray-400); }
@@ -630,41 +688,28 @@ textarea.form-control { resize: vertical; min-height: 90px; }
 .alert-success { background: var(--success-light); color: #166534; border: 1px solid #bbf7d0; }
 
 .spinner {
-  display: inline-block;
-  width: 1rem; height: 1rem;
-  border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: currentColor;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
+  display: inline-block; width: 1rem; height: 1rem;
+  border: 2px solid rgba(255,255,255,0.3); border-top-color: currentColor;
+  border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0;
 }
 .spinner-dark { border-color: var(--gray-200); border-top-color: var(--primary); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(15,23,42,0.5);
-  backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 300; padding: 1rem;
-  animation: fadeIn 0.15s ease;
+  position: fixed; inset: 0; background: rgba(15,23,42,0.5);
+  backdrop-filter: blur(2px); display: flex; align-items: center;
+  justify-content: center; z-index: 300; padding: 1rem; animation: fadeIn 0.15s ease;
 }
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
 .modal {
-  background: white;
-  border-radius: var(--radius-lg);
-  width: 100%; max-width: 520px;
-  max-height: 92vh; overflow-y: auto;
-  box-shadow: var(--shadow-lg);
-  animation: slideUp 0.2s ease;
+  background: white; border-radius: var(--radius-lg); width: 100%; max-width: 520px;
+  max-height: 92vh; overflow-y: auto; box-shadow: var(--shadow-lg); animation: slideUp 0.2s ease;
 }
 @keyframes slideUp { from { transform: translateY(12px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
 .modal-wide { max-width: 640px; }
 .modal-header {
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid var(--gray-200);
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 1rem;
+  padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--gray-200);
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
 }
 .modal-header h3 { font-size: 1rem; font-weight: 600; color: var(--gray-900); }
 .modal-close {
@@ -676,8 +721,7 @@ textarea.form-control { resize: vertical; min-height: 90px; }
 .modal-close:hover { background: var(--gray-200); color: var(--gray-700); }
 .modal-body { padding: 1.5rem; }
 .modal-footer {
-  padding: 1rem 1.5rem;
-  border-top: 1px solid var(--gray-200);
+  padding: 1rem 1.5rem; border-top: 1px solid var(--gray-200);
   display: flex; gap: 0.75rem; justify-content: flex-end;
 }
 
@@ -691,7 +735,6 @@ textarea.form-control { resize: vertical; min-height: 90px; }
 
 .loading-center {
   display: flex; align-items: center; justify-content: center;
-  gap: 0.75rem; padding: 3rem; color: var(--gray-500);
-  font-size: 0.875rem;
+  gap: 0.75rem; padding: 3rem; color: var(--gray-500); font-size: 0.875rem;
 }
 </style>
