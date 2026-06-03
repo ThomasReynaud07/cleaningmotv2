@@ -8,7 +8,7 @@ import { db } from './lib/db.js'
 import * as schema from './lib/schema.js'
 import { signToken, authMiddleware, adminMiddleware, type JwtPayload } from './lib/auth.js'
 
-export const config = { runtime: 'nodejs' }
+export const config = { runtime: 'edge' }
 
 const app = new Hono().basePath('/api')
 
