@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import bcrypt from 'bcryptjs'
-import { eq, desc, ilike, or, and, count, sql } from 'drizzle-orm'
+import { eq, desc, ilike, or, and, count, sql, ne, asc } from 'drizzle-orm'
 import { put } from '@vercel/blob'
 import { db } from './lib/db.js'
 import * as schema from './lib/schema.js'
@@ -826,6 +826,87 @@ app.get('/admin/audit-logs', authMiddleware, adminMiddleware, async (c) => {
       perPage,
     },
   })
+})
+
+// ─── Messages ────────────────────────────────────────────────────────────────
+
+async function getThread(userId: number) {
+  const senderAlias = schema.users
+  const msgs = await db
+    .select({
+      id: schema.messages.id,
+      content: schema.messages.content,
+      isRead: schema.messages.isRead,
+      createdAt: schema.messages.createdAt,
+      senderId: schema.messages.senderId,
+      senderFirstName: senderAlias.firstName,
+      senderLastName: senderAlias.lastName,
+    })
+    .from(schema.messages)
+    .leftJoin(senderAlias, eq(senderAlias.id, schema.messages.senderId))
+    .where(eq(schema.messages.userId, userId))
+    .orderBy(asc(schema.messages.createdAt))
+  return msgs
+}
+
+// User: get own thread
+app.get('/me/messages', authMiddleware, async (c) => {
+  const user = getUser(c)
+  const msgs = await getThread(user.sub)
+  await db.update(schema.messages)
+    .set({ isRead: true })
+    .where(and(eq(schema.messages.userId, user.sub), ne(schema.messages.senderId, user.sub), eq(schema.messages.isRead, false)))
+  return c.json(msgs.map(m => ({
+    id: m.id, content: m.content, isRead: m.isRead, createdAt: m.createdAt,
+    fromMe: m.senderId === user.sub,
+    sender: { firstName: m.senderFirstName ?? '', lastName: m.senderLastName ?? '' },
+  })))
+})
+
+// User: send message
+app.post('/me/messages', authMiddleware, async (c) => {
+  const user = getUser(c)
+  const { content } = await c.req.json<{ content: string }>()
+  if (!content?.trim()) return c.json({ error: 'Message required' }, 422)
+  const [msg] = await db.insert(schema.messages)
+    .values({ userId: user.sub, senderId: user.sub, content: content.trim() })
+    .returning()
+  return c.json({ ...msg, fromMe: true, sender: { firstName: user.firstName, lastName: user.lastName } }, 201)
+})
+
+// Admin: get user thread
+app.get('/admin/messages/:userId', authMiddleware, adminMiddleware, async (c) => {
+  const userId = Number(c.req.param('userId'))
+  const msgs = await getThread(userId)
+  await db.update(schema.messages)
+    .set({ isRead: true })
+    .where(and(eq(schema.messages.userId, userId), eq(schema.messages.senderId, userId), eq(schema.messages.isRead, false)))
+  return c.json(msgs.map(m => ({
+    id: m.id, content: m.content, isRead: m.isRead, createdAt: m.createdAt,
+    fromMe: m.senderId !== userId,
+    sender: { firstName: m.senderFirstName ?? '', lastName: m.senderLastName ?? '' },
+  })))
+})
+
+// Admin: reply to user
+app.post('/admin/messages/:userId', authMiddleware, adminMiddleware, async (c) => {
+  const admin = getUser(c)
+  const userId = Number(c.req.param('userId'))
+  const { content } = await c.req.json<{ content: string }>()
+  if (!content?.trim()) return c.json({ error: 'Message required' }, 422)
+  const [msg] = await db.insert(schema.messages)
+    .values({ userId, senderId: admin.sub, content: content.trim() })
+    .returning()
+  return c.json({ ...msg, fromMe: true, sender: { firstName: admin.firstName, lastName: admin.lastName } }, 201)
+})
+
+// Admin: count unread (messages sent by users, not yet read)
+app.get('/admin/messages/unread', authMiddleware, adminMiddleware, async (c) => {
+  const [{ value }] = await db
+    .select({ value: count() })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.senderId, schema.messages.userId), eq(schema.messages.isRead, false)))
+  return c.json({ unread: Number(value) })
 })
 
 const handler = (req: Request) => app.fetch(req)

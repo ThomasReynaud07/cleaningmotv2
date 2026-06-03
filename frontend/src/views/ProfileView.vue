@@ -1,22 +1,39 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { profileApi, type MyWarning, type MyComment } from '@/services/api'
-import { AlertTriangle, MessageSquare, CheckCircle2, ExternalLink } from 'lucide-vue-next'
+import { profileApi, messagesApi, type MyWarning, type MyComment, type Message } from '@/services/api'
+import { AlertTriangle, MessageSquare, CheckCircle2, ExternalLink, Mail, Send } from 'lucide-vue-next'
 
 const auth = useAuthStore()
 const warnings = ref<MyWarning[]>([])
 const comments = ref<MyComment[]>([])
+const messages = ref<Message[]>([])
 const loading = ref(true)
+const newMessage = ref('')
+const sendingMessage = ref(false)
+const threadRef = ref<HTMLElement | null>(null)
 
 onMounted(async () => {
   try {
-    const [wRes, cRes] = await Promise.all([profileApi.myWarnings(), profileApi.myComments()])
+    const [wRes, cRes, mRes] = await Promise.all([profileApi.myWarnings(), profileApi.myComments(), messagesApi.getThread()])
     warnings.value = wRes.data
     comments.value = cRes.data
+    messages.value = mRes.data
   } finally { loading.value = false }
 })
+
+async function sendMessage() {
+  if (!newMessage.value.trim() || sendingMessage.value) return
+  sendingMessage.value = true
+  try {
+    const { data } = await messagesApi.send(newMessage.value)
+    messages.value.push(data)
+    newMessage.value = ''
+    await nextTick()
+    threadRef.value?.scrollTo({ top: threadRef.value.scrollHeight, behavior: 'smooth' })
+  } finally { sendingMessage.value = false }
+}
 
 function formatDate(d: string) {
   return new Intl.DateTimeFormat('fr-CH', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(d))
@@ -61,9 +78,10 @@ function warnSeverity(count: number) {
       <span class="spinner spinner-dark"></span> Chargement...
     </div>
 
-    <div v-else class="profile-grid">
+    <div v-else>
+    <div class="profile-grid">
       <!-- Warnings -->
-      <div class="panel card">
+<div class="panel card">
         <div class="panel-head" :class="warnings.length > 0 ? warnSeverity(warnings.length).cls + '-bg' : 'clean-bg'">
           <div class="panel-head-left">
             <AlertTriangle :size="18" :class="warnings.length > 0 ? 'icon-warn' : 'icon-ok'" />
@@ -133,6 +151,43 @@ function warnSeverity(count: number) {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Messaging -->
+    <div class="card msg-panel">
+      <div class="panel-head msg-head">
+        <div class="panel-head-left">
+          <Mail :size="18" style="color:#7c3aed" />
+          <div>
+            <div class="panel-title">Messages</div>
+            <div class="panel-sub">Communication avec les administrateurs</div>
+          </div>
+        </div>
+      </div>
+      <div class="msg-body">
+        <div class="msg-thread" ref="threadRef">
+          <div v-if="!messages.length" class="panel-empty">
+            <Mail :size="32" style="color:var(--gray-300)" />
+            <p>Aucun message — envoyez un message pour contacter un administrateur</p>
+          </div>
+          <div v-for="m in messages" :key="m.id" class="bubble-row" :class="m.fromMe ? 'bubble-row-right' : 'bubble-row-left'">
+            <div class="bubble" :class="m.fromMe ? 'bubble-me' : 'bubble-admin'">
+              <div class="bubble-sender">{{ m.fromMe ? 'Moi' : m.sender.firstName + ' ' + m.sender.lastName }}</div>
+              <div class="bubble-text">{{ m.content }}</div>
+              <div class="bubble-time">{{ formatDate(m.createdAt) }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="msg-compose">
+          <textarea v-model="newMessage" class="form-control msg-input" rows="2" placeholder="Votre message aux administrateurs..." @keydown.ctrl.enter="sendMessage"></textarea>
+          <button class="btn btn-primary msg-send" @click="sendMessage" :disabled="!newMessage.trim() || sendingMessage">
+            <span v-if="sendingMessage" class="spinner"></span>
+            <Send v-else :size="15" />
+          </button>
+        </div>
+      </div>
+    </div>
+
     </div>
   </div>
 </template>
@@ -208,9 +263,27 @@ function warnSeverity(count: number) {
 .comment-date { font-size: 0.72rem; color: var(--gray-400); margin-left: auto; }
 .comment-text { font-size: 0.875rem; color: var(--gray-700); line-height: 1.5; }
 
+.msg-panel { margin-top: 1.5rem; overflow: hidden; }
+.msg-head { background: #f5f3ff; }
+.msg-body { display: flex; flex-direction: column; }
+.msg-thread { padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; max-height: 400px; overflow-y: auto; }
+.bubble-row { display: flex; }
+.bubble-row-right { justify-content: flex-end; }
+.bubble-row-left { justify-content: flex-start; }
+.bubble { max-width: 70%; padding: 0.625rem 0.875rem; border-radius: 12px; }
+.bubble-me { background: var(--primary); color: white; border-bottom-right-radius: 3px; }
+.bubble-admin { background: var(--gray-100); color: var(--gray-900); border-bottom-left-radius: 3px; }
+.bubble-sender { font-size: 0.7rem; font-weight: 600; margin-bottom: 0.25rem; opacity: 0.75; }
+.bubble-text { font-size: 0.875rem; line-height: 1.5; white-space: pre-wrap; }
+.bubble-time { font-size: 0.68rem; margin-top: 0.3rem; opacity: 0.6; text-align: right; }
+.msg-compose { display: flex; gap: 0.75rem; padding: 1rem 1.25rem; border-top: 1px solid var(--gray-200); background: var(--gray-50); align-items: flex-end; }
+.msg-input { flex: 1; resize: none; }
+.msg-send { flex-shrink: 0; height: 38px; }
+
 @media (max-width: 768px) {
   .profile-hero { flex-direction: column; align-items: flex-start; }
   .profile-grid { grid-template-columns: 1fr; }
   .profile-stats { margin-top: 0.5rem; }
+  .bubble { max-width: 85%; }
 }
 </style>

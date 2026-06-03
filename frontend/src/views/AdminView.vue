@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { adminApi, auditApi, type AdminUser, type UserWarning, type AuditLog } from '@/services/api'
+import { ref, onMounted, computed, nextTick } from 'vue'
+import { adminApi, adminMessagesApi, auditApi, type AdminUser, type UserWarning, type AuditLog, type Message } from '@/services/api'
 import {
   Users, Shield, AlertTriangle, Search, ChevronDown,
-  Crown, UserCheck, Trash2, X, Plus, Eye, ScrollText, ChevronLeft, ChevronRight,
+  Crown, UserCheck, Trash2, X, Plus, Eye, ScrollText, ChevronLeft, ChevronRight, Mail, Send,
 } from 'lucide-vue-next'
 
 const activeTab = ref<'users' | 'audit'>('users')
@@ -19,6 +19,10 @@ const warnReason = ref('')
 const warnLoading = ref(false)
 const warnError = ref('')
 const roleLoading = ref<number | null>(null)
+const userMessages = ref<Message[]>([])
+const adminReply = ref('')
+const replyLoading = ref(false)
+const msgThreadRef = ref<HTMLElement | null>(null)
 const filterRole = ref<'all' | 'user' | 'admin'>('all')
 
 const filteredUsers = computed(() =>
@@ -40,7 +44,26 @@ function onSearch() {
 }
 
 async function openUser(user: AdminUser) {
-  try { const { data } = await adminApi.getUser(user.id); selectedUser.value = data; showUserModal.value = true } catch {}
+  try {
+    const [{ data }, { data: msgs }] = await Promise.all([adminApi.getUser(user.id), adminMessagesApi.getThread(user.id)])
+    selectedUser.value = data
+    userMessages.value = msgs
+    showUserModal.value = true
+    await nextTick()
+    msgThreadRef.value?.scrollTo({ top: msgThreadRef.value.scrollHeight })
+  } catch {}
+}
+
+async function sendReply() {
+  if (!selectedUser.value || !adminReply.value.trim() || replyLoading.value) return
+  replyLoading.value = true
+  try {
+    const { data } = await adminMessagesApi.reply(selectedUser.value.id, adminReply.value)
+    userMessages.value.push(data)
+    adminReply.value = ''
+    await nextTick()
+    msgThreadRef.value?.scrollTo({ top: msgThreadRef.value.scrollHeight, behavior: 'smooth' })
+  } finally { replyLoading.value = false }
 }
 
 function openWarnModal() { warnReason.value = ''; warnError.value = ''; showWarnModal.value = true }
@@ -379,6 +402,34 @@ function auditPayloadSummary(log: AuditLog): string {
               </div>
             </div>
           </div>
+
+          <!-- Messages section -->
+          <div class="msg-section">
+            <div class="warn-section-title">
+              <Mail :size="14" style="color:#7c3aed" /> Messages
+              <span class="count-chip">{{ userMessages.length }}</span>
+            </div>
+            <div class="admin-msg-thread" ref="msgThreadRef">
+              <div v-if="!userMessages.length" class="empty-warns">
+                <Mail :size="20" style="color:var(--gray-300)" />
+                <p>Aucun message</p>
+              </div>
+              <div v-for="m in userMessages" :key="m.id" class="bubble-row" :class="m.fromMe ? 'bubble-row-right' : 'bubble-row-left'">
+                <div class="bubble" :class="m.fromMe ? 'bubble-admin-sent' : 'bubble-user'">
+                  <div class="bubble-sender">{{ m.fromMe ? 'Vous' : m.sender.firstName + ' ' + m.sender.lastName }}</div>
+                  <div class="bubble-text">{{ m.content }}</div>
+                  <div class="bubble-time">{{ formatDate(m.createdAt) }}</div>
+                </div>
+              </div>
+            </div>
+            <div class="admin-msg-compose">
+              <textarea v-model="adminReply" class="form-control msg-input-sm" rows="2" placeholder="Répondre à l'utilisateur..." @keydown.ctrl.enter="sendReply"></textarea>
+              <button class="btn btn-primary btn-sm" @click="sendReply" :disabled="!adminReply.trim() || replyLoading">
+                <span v-if="replyLoading" class="spinner"></span>
+                <Send v-else :size="13" /> Envoyer
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -526,6 +577,21 @@ function auditPayloadSummary(log: AuditLog): string {
 .audit-info    { background: #eff6ff; color: #1d4ed8; }
 
 .empty-audit { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; padding: 3rem; text-align: center; color: var(--gray-400); font-size: 0.875rem; }
+
+/* Messages in admin modal */
+.msg-section { border-top: 1px solid var(--gray-200); padding-top: 1.25rem; margin-top: 1.25rem; }
+.admin-msg-thread { display: flex; flex-direction: column; gap: 0.6rem; max-height: 280px; overflow-y: auto; padding: 0.75rem; background: var(--gray-50); border-radius: var(--radius-sm); margin-bottom: 0.75rem; }
+.bubble-row { display: flex; }
+.bubble-row-right { justify-content: flex-end; }
+.bubble-row-left { justify-content: flex-start; }
+.bubble { max-width: 75%; padding: 0.5rem 0.75rem; border-radius: 10px; }
+.bubble-admin-sent { background: #7c3aed; color: white; border-bottom-right-radius: 3px; }
+.bubble-user { background: white; border: 1px solid var(--gray-200); color: var(--gray-900); border-bottom-left-radius: 3px; }
+.bubble-sender { font-size: 0.68rem; font-weight: 600; margin-bottom: 0.2rem; opacity: 0.75; }
+.bubble-text { font-size: 0.825rem; line-height: 1.5; white-space: pre-wrap; }
+.bubble-time { font-size: 0.65rem; margin-top: 0.25rem; opacity: 0.6; text-align: right; }
+.admin-msg-compose { display: flex; gap: 0.6rem; align-items: flex-end; }
+.msg-input-sm { flex: 1; resize: none; font-size: 0.85rem; }
 
 .hide-sm { }
 @media (max-width: 768px) {

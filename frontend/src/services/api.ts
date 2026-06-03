@@ -156,6 +156,26 @@ export const auditApi = {
   getLogs: (page = 1) => api.get<AuditLogPage>('/api/admin/audit-logs', { params: { page } }),
 }
 
+export interface Message {
+  id: number
+  content: string
+  isRead: boolean
+  createdAt: string
+  fromMe: boolean
+  sender: { firstName: string; lastName: string }
+}
+
+export const messagesApi = {
+  getThread: () => api.get<Message[]>('/api/me/messages'),
+  send: (content: string) => api.post<Message>('/api/me/messages', { content }),
+}
+
+export const adminMessagesApi = {
+  getThread: (userId: number) => api.get<Message[]>(`/api/admin/messages/${userId}`),
+  reply: (userId: number, content: string) => api.post<Message>(`/api/admin/messages/${userId}`, { content }),
+  unreadCount: () => api.get<{ unread: number }>('/api/admin/messages/unread'),
+}
+
 export const getPhotoUrl = (url: string) => url
 
 export default api

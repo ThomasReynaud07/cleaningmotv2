@@ -141,6 +141,12 @@ async function markLabClean() {
   await store.fetchLab(labId.value)
 }
 
+async function markLabAttention() {
+  if (!lab.value) return
+  await store.updateLabStatus(lab.value.id, 'needs_attention')
+  await store.fetchLab(labId.value)
+}
+
 async function deleteLab() {
   if (!lab.value || !confirm(`Supprimer définitivement "${lab.value.name}" ?`)) return
   try { await store.deleteLab(lab.value.id); router.push('/') } catch {}
@@ -197,6 +203,9 @@ async function submitQuickWarn() {
           </button>
           <button v-if="auth.isAdmin && lab.status !== 'clean'" class="btn btn-success" @click="markLabClean">
             <CheckCircle2 :size="15" /> Marquer propre
+          </button>
+          <button v-if="auth.isAdmin && lab.status !== 'needs_attention'" class="btn btn-warning-outline" @click="markLabAttention">
+            <AlertTriangle :size="15" /> À vérifier
           </button>
           <button class="btn btn-outline" @click="openQrModal" title="Afficher le QR code">
             <QrCode :size="15" />

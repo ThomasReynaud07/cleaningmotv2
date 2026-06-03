@@ -353,6 +353,8 @@ button { font-family: inherit; }
   border: 1px solid var(--gray-200);
 }
 .btn-outline:hover:not(:disabled) { background: var(--gray-50); border-color: var(--gray-300); }
+.btn-warning-outline { background: white; color: #92400e; border: 1px solid #fde68a; }
+.btn-warning-outline:hover:not(:disabled) { background: #fffbeb; border-color: #fbbf24; }
 .btn-ghost { background: transparent; color: var(--gray-600); }
 .btn-ghost:hover:not(:disabled) { background: var(--gray-100); }
 .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.8rem; }

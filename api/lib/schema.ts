@@ -7,6 +7,7 @@ import {
   varchar,
   pgEnum,
   json,
+  boolean,
 } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 
@@ -90,6 +91,15 @@ export const warnings = pgTable('warnings', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
 
+export const messages = pgTable('messages', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  senderId: integer('sender_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  isRead: boolean('is_read').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
 export const auditLogs = pgTable('audit_logs', {
   id: serial('id').primaryKey(),
   action: text('action').notNull(),
@@ -132,6 +142,11 @@ export const commentsRelations = relations(comments, ({ one }) => ({
 export const warningsRelations = relations(warnings, ({ one }) => ({
   user: one(users, { fields: [warnings.userId], references: [users.id], relationName: 'userWarnings' }),
   admin: one(users, { fields: [warnings.adminId], references: [users.id], relationName: 'adminWarnings' }),
+}))
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  user: one(users, { fields: [messages.userId], references: [users.id], relationName: 'userMessages' }),
+  sender: one(users, { fields: [messages.senderId], references: [users.id], relationName: 'sentMessages' }),
 }))
 
 export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
