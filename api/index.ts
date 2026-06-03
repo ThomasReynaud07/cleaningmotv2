@@ -828,4 +828,9 @@ app.get('/admin/audit-logs', authMiddleware, adminMiddleware, async (c) => {
   })
 })
 
-export default (req: Request) => app.fetch(req)
+const handler = (req: Request) => app.fetch(req)
+export const GET = handler
+export const POST = handler
+export const PUT = handler
+export const PATCH = handler
+export const DELETE = handler
